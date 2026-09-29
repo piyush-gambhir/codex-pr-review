@@ -13,19 +13,20 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - name: action.yml is valid
+      - name: action.yml and trigger/action.yml are valid
         run: |
           python3 - <<'PY'
           import yaml
-          action = yaml.safe_load(open("action.yml"))
-          assert action["runs"]["using"] == "composite"
-          for step in action["runs"]["steps"]:
-              assert "uses" in step or "shell" in step, step["name"]
-          print(f"{len(action['inputs'])} inputs, {len(action['runs']['steps'])} steps")
+          for path in ("action.yml", "trigger/action.yml"):
+              action = yaml.safe_load(open(path))
+              assert action["runs"]["using"] == "composite"
+              for step in action["runs"]["steps"]:
+                  assert "uses" in step or "shell" in step, step["name"]
+              print(f"{path}: {len(action['inputs'])} inputs, {len(action['runs']['steps'])} steps")
           PY
       - name: Unit tests
         run: python3 -m unittest discover -s tests -v
       - name: actionlint
         run: |
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
-          ./actionlint -color examples/codex-review.yml .github/workflows/*.yml
+          ./actionlint -color examples/*.yml .github/workflows/*.yml

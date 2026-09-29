@@ -1,0 +1,7 @@
+# actionlint does not know the `job.workflow_*` contexts yet (they name the
+# workflow file defining the running job, which is how the reusable workflow
+# finds its own repository and ref). Drop just those errors.
+paths:
+  .github/workflows/review.yml:
+    ignore:
+      - 'property "workflow_(repository|sha)" is not defined in object type'

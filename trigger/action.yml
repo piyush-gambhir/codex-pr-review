@@ -1,0 +1,82 @@
+name: Codex PR Review trigger
+description: >-
+  Decide whether a Codex review should run: parse `@gpt review` comments, review
+  labels or manual runs, check write access and the pull request, and report the
+  PR number, head SHA, base ref, provider and effort.
+author: Piyush Gambhir
+branding:
+  icon: filter
+  color: purple
+
+inputs:
+  command:
+    description: "Comment prefix that requests a review. Options follow it on the first line, e.g. `@gpt review bedrock high`."
+    default: "@gpt review"
+  label:
+    description: "Label that requests a review when added to a pull request. Empty turns label triggers off."
+    default: codex-review
+  remove-label:
+    description: "Remove the label again after a label-triggered request, so it can be re-added to re-run."
+    default: "true"
+  base-branches:
+    description: "Comma-separated base branches that may be reviewed. Empty means the repository's default branch."
+    default: ""
+  default-provider:
+    description: "Provider when the request does not name one: `openai` or `bedrock`."
+    default: openai
+  default-effort:
+    description: "Reasoning effort when the request does not name one: low, medium, high or xhigh."
+    default: medium
+  allowed-providers:
+    description: "Comma-separated providers a request may choose, e.g. `openai` to forbid Bedrock."
+    default: openai,bedrock
+  pr-number:
+    description: "Pull request number, for `workflow_dispatch` runs. Ignored for comment and label triggers."
+    default: ""
+  github-token:
+    description: "Token used to read the PR and to react or reply (needs `pull-requests: write` and `issues: write`)."
+    default: ${{ github.token }}
+
+outputs:
+  run:
+    description: "`true` when a review should run; `false` for anything else, including declined requests."
+    value: ${{ steps.decide.outputs.run }}
+  pr-number:
+    description: "Pull request to review."
+    value: ${{ steps.decide.outputs.pr-number }}
+  head-sha:
+    description: "Head commit of that pull request, to check out and anchor the review to."
+    value: ${{ steps.decide.outputs.head-sha }}
+  base-ref:
+    description: "Ref to review against, already prefixed for a checkout, e.g. `origin/main`."
+    value: ${{ steps.decide.outputs.base-ref }}
+  provider:
+    description: "Provider the request asked for, or the default."
+    value: ${{ steps.decide.outputs.provider }}
+  effort:
+    description: "Reasoning effort the request asked for, or the default."
+    value: ${{ steps.decide.outputs.effort }}
+  comment-id:
+    description: "ID of the requesting comment, for reactions. Empty for label and manual triggers."
+    value: ${{ steps.decide.outputs.comment-id }}
+  reason:
+    description: "Why no review runs, e.g. `no-command`, `no-write-access`, `fork`, `base-branch-not-allowed`."
+    value: ${{ steps.decide.outputs.reason }}
+
+runs:
+  using: composite
+  steps:
+    - name: Decide whether to review
+      id: decide
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        COMMAND: ${{ inputs.command }}
+        LABEL: ${{ inputs.label }}
+        REMOVE_LABEL: ${{ inputs.remove-label }}
+        BASE_BRANCHES: ${{ inputs.base-branches }}
+        DEFAULT_PROVIDER: ${{ inputs.default-provider }}
+        DEFAULT_EFFORT: ${{ inputs.default-effort }}
+        ALLOWED_PROVIDERS: ${{ inputs.allowed-providers }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+      run: python3 "$GITHUB_ACTION_PATH/../scripts/trigger.py"

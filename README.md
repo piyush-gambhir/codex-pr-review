@@ -42,7 +42,32 @@ Comment `@gpt review` on a pull request. About a minute later you get a review w
 ## Quick start
 
 1. Add an `OPENAI_API_KEY` Actions secret (or set up [Bedrock](#amazon-bedrock)).
-2. Copy [`examples/codex-review.yml`](examples/codex-review.yml) to `.github/workflows/codex-review.yml`, set `BASE_BRANCH`, and merge it into your default branch (comment-triggered workflows run from there).
+2. Put this in `.github/workflows/codex-review.yml` on your default branch (comment-triggered workflows only run from there):
+
+   ```yaml
+   name: Codex PR Review
+
+   on:
+     issue_comment:
+       types: [created]
+     pull_request:
+       types: [labeled]
+
+   permissions: {}
+
+   jobs:
+     codex:
+       permissions:
+         contents: read
+         pull-requests: write # post the review, react and reply
+         issues: write # react to the requesting comment
+         id-token: write # AWS OIDC, for the bedrock provider
+       uses: piyush-gambhir/codex-pr-review/.github/workflows/review.yml@v1
+       with:
+         base-branches: main
+       secrets: inherit
+   ```
+
 3. Comment on an open pull request:
 
    | Comment | Does |
@@ -52,15 +77,67 @@ Comment `@gpt review` on a pull request. About a minute later you get a review w
    | `@gpt review bedrock` | Use Amazon Bedrock for this request |
    | `@gpt review bedrock xhigh` | Both |
 
-   Defaults come from the repository variables `CODEX_REVIEW_PROVIDER` (`openai`) and `CODEX_REVIEW_EFFORT` (`medium`).
+Only open, same-repository PRs into `base-branches`, requested by someone with write access, are reviewed, one review at a time per PR. Nothing runs on open or push, so you only pay for reviews someone asks for.
 
-The example workflow only reviews open, same-repository PRs into `BASE_BRANCH`, requested by someone with write access, one review at a time per PR. Nothing runs on open or push, so you only pay for reviews someone asks for.
+[`examples/codex-review.yml`](examples/codex-review.yml) is this file with the manual trigger and the optional settings filled in. If you would rather see every step (or you are on GitHub Enterprise Server, where the reusable workflow does not work), copy [`examples/codex-review-standalone.yml`](examples/codex-review-standalone.yml) instead: same behaviour, all of it in your repository.
+
+## Triggers
+
+Three ways to ask for a review, all handled by the same gate:
+
+| Trigger | How | Notes |
+|---|---|---|
+| Comment | `@gpt review [openai\|bedrock] [low\|medium\|high\|xhigh]` at the start of a PR comment | Options come from the first line; the comment gets 👀, then 🚀 or 😕 |
+| Label | Add the `codex-review` label to the PR | The label is removed again, so re-adding it re-runs the review. Set `label: ""` to switch this off |
+| Manual | Actions tab → the workflow → **Run workflow** → PR number | Add a `workflow_dispatch` input named `pr-number` and pass it through as `pr-number` |
+
+Every trigger requires write access on the repository, an open pull request, a same-repository head branch (fork PRs are skipped, because the review job holds model credentials) and a base branch listed in `base-branches`. A PR into an unlisted base branch gets one short reply saying so; everything else is declined silently, and the workflow stays green.
+
+## Reusable workflow inputs
+
+Everything is optional. `base-branches` defaults to your repository's default branch.
+
+| Input | Default | Description |
+|---|---|---|
+| `base-branches` | default branch | Comma-separated base branches that may be reviewed |
+| `command` | `@gpt review` | Comment prefix that requests a review |
+| `label` | `codex-review` | Label that requests a review; empty turns label triggers off |
+| `remove-label` | `true` | Remove the label again, so it can be re-added to re-run |
+| `default-provider` | `openai` | Provider when the request does not name one |
+| `default-effort` | `medium` | Reasoning effort when the request does not name one |
+| `allowed-providers` | `openai,bedrock` | Providers a request may choose |
+| `pr-number` | | Pull request number for `workflow_dispatch` runs |
+| `runs-on` | `ubuntu-24.04` | Runner label, or a JSON array such as `["self-hosted", "linux"]` |
+| `model` | per provider | Model ID |
+| `aws-region` | `us-east-1` | Bedrock region |
+| `guidelines-path` | `.github/codex-review.md` | Guidelines file, read from your default branch; empty loads none |
+| `max-priority` | `P3` | Lowest priority to report |
+| `fail-on-priority` | | Fail the review when a finding at this priority or higher is reported |
+| `app-id` | | GitHub App ID, to post under your own bot name and avatar |
+
+Secrets (`secrets: inherit` passes whichever you have): `OPENAI_API_KEY`, `AWS_ROLE_TO_ASSUME`, `CODEX_REVIEW_APP_PRIVATE_KEY`, and `ACTION_REPO_TOKEN` only if you run a private copy of this repository.
+
+### Just the trigger
+
+To keep your own review job and only reuse the gate, use the trigger action on its own:
+
+```yaml
+- id: trigger
+  uses: piyush-gambhir/codex-pr-review/trigger@v1
+  with:
+    base-branches: main
+    label: codex-review
+```
+
+It outputs `run` (`true` or `false`), `pr-number`, `head-sha`, `base-ref` (already `origin/`-prefixed), `provider`, `effort`, `comment-id` and `reason` (why no review runs, e.g. `no-command`, `no-write-access`, `fork`, `base-branch-not-allowed`). It needs `pull-requests: write` and `issues: write` to react, reply and remove the label.
+
+> **How the reusable workflow finds its own action.** `github.workflow_ref` and `github.workflow_sha` describe the *caller*, and `./` resolves against the caller's checkout, so neither can name the action version that belongs with the workflow. Each job instead checks out `job.workflow_repository` at `job.workflow_sha` (the workflow file defining the running job, which is this workflow) and uses the action from that checkout. So `@v1.1.0` of the workflow runs v1.1.0 of the action, a full-SHA pin runs that SHA, and a private copy of this repository uses itself. The trade-off: [`job.workflow_*`](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#job-context) does not exist on GitHub Enterprise Server, so use the standalone example there.
 
 ## Customising
 
 ### Repository guidelines
 
-Put review rules in `.github/codex-review.md` on your default branch. The example workflow loads that file from the default branch (never from the PR, so a PR can't rewrite the rules it's reviewed against) and passes it to Codex. Codex applies it on top of its own review logic. See [`examples/codex-review.md`](examples/codex-review.md).
+Put review rules in `.github/codex-review.md` on your default branch (or point `guidelines-path` elsewhere). The workflow loads that file from the default branch (never from the PR, so a PR can't rewrite the rules it's reviewed against) and passes it to Codex. Codex applies it on top of its own review logic. See [`examples/codex-review.md`](examples/codex-review.md).
 
 Guidelines are good for:
 
@@ -91,8 +168,9 @@ By default reviews are posted by `github-actions`. To post under your own name a
 2. Upload a logo. [`assets/icon.png`](assets/icon.png) is free to use, or bring your own.
 3. Install the app on your repository, and generate a private key.
 4. Add the repository variable `CODEX_REVIEW_APP_ID` (the app ID) and the secret `CODEX_REVIEW_APP_PRIVATE_KEY` (the `.pem` contents).
+5. Pass the ID to the reusable workflow: `with: { app-id: "${{ vars.CODEX_REVIEW_APP_ID }}" }`.
 
-The example workflow detects the variable, mints an app token with `actions/create-github-app-token`, and passes it as `github-token`. Reviews then appear as `your-app-name[bot]` with your logo. Please don't use OpenAI's or Codex's name or logo for your app, so readers don't mistake it for an official product.
+The workflow mints an app token with `actions/create-github-app-token` and passes it as `github-token`. Reviews then appear as `your-app-name[bot]` with your logo. Please don't use OpenAI's or Codex's name or logo for your app, so readers don't mistake it for an official product.
 
 ## Amazon Bedrock
 
@@ -186,9 +264,9 @@ Standard OpenAI API rates, which Bedrock matches. Input above 272K tokens is bil
 
 ## Security
 
-- **Trusted contributors only.** The review job holds model credentials and checks out PR code. It never builds or runs that code, but Codex may run read-only commands in its sandbox while reviewing. The example workflow skips fork PRs and requires write access to trigger.
+- **Trusted contributors only.** The review job holds model credentials and checks out PR code. It never builds or runs that code, but Codex may run read-only commands in its sandbox while reviewing. The trigger skips fork PRs and requires write access.
 - **Don't use `pull_request_target`** with this action.
-- **Load guidelines from the default branch**, as the example does.
+- **Load guidelines from the default branch**, as the workflow does.
 - **Pin the action** to a tag or commit SHA.
 
 ## Development
@@ -200,6 +278,7 @@ python3 -m unittest discover -s tests -v
 The tests cover:
 
 - parsing real Codex output, including layouts nudged by custom guidelines
+- the trigger: option parsing, every event, access, forks, base branches, label removal
 - filtering, gating and rendering
 - status notes
 - config generation
