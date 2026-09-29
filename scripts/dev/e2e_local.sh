@@ -9,7 +9,8 @@
 #   GH_TOKEN=$(gh auth token --user <you>) scripts/dev/e2e_local.sh <owner/repo> <pr-number>
 #
 # Any environment variable the scripts read (MAX_PRIORITY, POST_MODE,
-# REVIEW_INSTRUCTIONS, FAIL_ON_PRIORITY, HIDE_PREVIOUS, ...) can be set to
+# REVIEW_INSTRUCTIONS, FAIL_ON_PRIORITY, HIDE_PREVIOUS, SUGGESTIONS,
+# INCLUDE_PATHS, EXCLUDE_PATHS, MAX_CHANGED_LINES, LARGE_PR, ...) can be set to
 # override the defaults below. DRY_RUN=1 skips everything that posts.
 #
 # CHECK_RUN=1 also runs the check-run steps; a personal token cannot create
@@ -66,11 +67,24 @@ export GITHUB_WORKSPACE="$checkout" REVIEW_WORKSPACE="$checkout"
 export POST_MODE="${POST_MODE:-review}" HIDE_PREVIOUS="${HIDE_PREVIOUS:-true}"
 export SUMMARY_FILE="$run/codex-review-summary.md"
 export SARIF_FILE="${SARIF_FILE:-$run/codex-review.sarif}" CODEX_VERSION="$codex_version"
+export SUGGESTIONS="${SUGGESTIONS:-true}"
+export INCLUDE_PATHS="${INCLUDE_PATHS:-}" EXCLUDE_PATHS="${EXCLUDE_PATHS:-}"
+export MAX_CHANGED_LINES="${MAX_CHANGED_LINES:-}" LARGE_PR="${LARGE_PR:-warn}"
 : > "$GITHUB_OUTPUT"
 echo "run dir: $run"
 
 post() { [ "${DRY_RUN:-0}" = "1" ] || "$@"; }
 output() { sed -n "s/^$1=//p" "$GITHUB_OUTPUT" | tail -1; }
+
+# Size guard, the same order action.yml runs it: before anything is posted.
+(cd "$checkout" && python3 "$root/scripts/filters.py")
+export SIZE_NOTE="$(sed -n 's/^note=//p' "$GITHUB_OUTPUT" | tail -1)"
+if [ "$(sed -n 's/^skip=//p' "$GITHUB_OUTPUT" | tail -1)" = "true" ]; then
+  echo "skipping the review: over max-changed-lines"
+  CHANGED_LINES="$(sed -n 's/^changed-lines=//p' "$GITHUB_OUTPUT" | tail -1)" \
+    post python3 "$root/scripts/status.py" skip
+  exit 0
+fi
 
 post python3 "$root/scripts/status.py" start
 export STATUS_COMMENT_ID="$(output status-comment-id)"

@@ -45,6 +45,18 @@ inputs:
   working-directory:
     description: "Path of the PR checkout, relative to the workspace."
     default: .
+  include-paths:
+    description: "Only report findings in files matching these glob patterns (newline or comma separated, `**` supported). Empty reports every file."
+    default: ""
+  exclude-paths:
+    description: "Never report findings in files matching these glob patterns; Codex is told to skip them as well."
+    default: ""
+  max-changed-lines:
+    description: "Added plus deleted lines (merge base to HEAD, after the path filters) above which `large-pr` applies. Empty means no limit."
+    default: ""
+  large-pr:
+    description: "Over `max-changed-lines`: `warn` (review anyway and note it) or `skip` (post a note and skip the review)."
+    default: warn
 
   # Review behaviour
   review-instructions:
@@ -53,6 +65,9 @@ inputs:
   review-instructions-file:
     description: "Path (relative to the workspace) of a Markdown file with review guidelines. Load it from a trusted checkout, not the PR."
     default: ""
+  suggestions:
+    description: "Ask Codex to include small, self-contained fixes as GitHub suggestions that can be committed straight from the review."
+    default: "true"
   max-priority:
     description: "Lowest priority to report: P0 (critical only) to P3 (everything)."
     default: P3
@@ -122,8 +137,14 @@ outputs:
   resolved-count:
     description: "Previous findings no longer reported (fixed since the last Codex review)."
     value: ${{ steps.publish.outputs.resolved-count }}
+  path-filtered-count:
+    description: "Findings hidden by include-paths or exclude-paths."
+    value: ${{ steps.publish.outputs.path-filtered-count }}
+  changed-lines:
+    description: "Added plus deleted lines between the merge base and HEAD, after the path filters."
+    value: ${{ steps.guard.outputs.changed-lines }}
   findings-file:
-    description: "Path of a JSON file with the reported findings (priority, title, path, start, end, body)."
+    description: "Path of a JSON file with the reported findings (priority, title, path, start, end, body, suggestion)."
     value: ${{ steps.publish.outputs.findings-file }}
   review-file:
     description: "Path of Codex's raw final review message."
@@ -185,9 +206,41 @@ runs:
           echo "label=$label"
         } >> "$GITHUB_OUTPUT"
 
+    # Runs before anything is installed or posted, so an oversized pull request
+    # costs nothing beyond one `git diff --numstat`.
+    - name: Check pull request size
+      id: guard
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        BASE_REF: ${{ inputs.base-ref }}
+        REVIEW_TITLE: ${{ inputs.title }}
+        MODEL: ${{ steps.settings.outputs.model }}
+        LABEL: ${{ steps.settings.outputs.label }}
+        REASONING_EFFORT: ${{ inputs.reasoning-effort }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RERUN_HINT: ${{ inputs.rerun-hint }}
+        INCLUDE_PATHS: ${{ inputs.include-paths }}
+        EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
+        MAX_CHANGED_LINES: ${{ inputs.max-changed-lines }}
+        LARGE_PR: ${{ inputs.large-pr }}
+        POST_MODE: ${{ inputs.post-mode }}
+      run: |
+        python3 "$GITHUB_ACTION_PATH/scripts/filters.py"
+        if [ "$(sed -n 's/^skip=//p' "$GITHUB_OUTPUT" | tail -1)" = "true" ]; then
+          echo "::warning::Skipping the review: the pull request is over max-changed-lines."
+          if [ "$POST_MODE" != "none" ]; then
+            CHANGED_LINES="$(sed -n 's/^changed-lines=//p' "$GITHUB_OUTPUT" | tail -1)" \
+              python3 "$GITHUB_ACTION_PATH/scripts/status.py" skip
+          fi
+        fi
+
     - name: Post progress note
       id: status
-      if: inputs.post-mode != 'none' && inputs.status-comment == 'true'
+      if: steps.guard.outputs.skip != 'true' && inputs.post-mode != 'none' && inputs.status-comment == 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
@@ -207,7 +260,7 @@ runs:
     # the commits pushed since then.
     - name: Read the previous review
       id: history
-      if: inputs.post-mode != 'none'
+      if: steps.guard.outputs.skip != 'true' && inputs.post-mode != 'none'
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -224,7 +277,7 @@ runs:
     # workflow's own check suite instead of getting a suite of its own.
     - name: Start check run
       id: check
-      if: inputs.check-run == 'true'
+      if: steps.guard.outputs.skip != 'true' && inputs.check-run == 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
@@ -240,6 +293,7 @@ runs:
     # Installed into RUNNER_TEMP with install scripts disabled, so nothing from
     # the pull request can influence the reviewer binary.
     - name: Install Codex CLI
+      if: steps.guard.outputs.skip != 'true'
       shell: bash
       working-directory: ${{ runner.temp }}
       env:
@@ -255,7 +309,7 @@ runs:
     # review step below ever sees them.
     - name: Assume the Bedrock role (OIDC)
       id: aws
-      if: inputs.provider == 'bedrock'
+      if: steps.guard.outputs.skip != 'true' && inputs.provider == 'bedrock'
       uses: aws-actions/configure-aws-credentials@v6
       with:
         role-to-assume: ${{ inputs.aws-role-to-assume }}
@@ -266,6 +320,7 @@ runs:
         output-credentials: true
 
     - name: Write Codex config
+      if: steps.guard.outputs.skip != 'true'
       shell: bash
       env:
         CODEX_HOME: ${{ runner.temp }}/codex-home
@@ -276,10 +331,13 @@ runs:
         REVIEW_INSTRUCTIONS: ${{ inputs.review-instructions }}
         REVIEW_INSTRUCTIONS_FILE: ${{ inputs.review-instructions-file }}
         CODEX_CONFIG: ${{ inputs.codex-config }}
+        SUGGESTIONS: ${{ inputs.suggestions }}
+        EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/write_config.py"
 
     - name: Run Codex review
       id: review
+      if: steps.guard.outputs.skip != 'true'
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
@@ -316,6 +374,7 @@ runs:
     # from the session rollout Codex just wrote.
     - name: Measure token usage and cost
       id: usage
+      if: steps.guard.outputs.skip != 'true'
       shell: bash
       env:
         CODEX_HOME: ${{ runner.temp }}/codex-home
@@ -325,6 +384,7 @@ runs:
 
     - name: Publish review
       id: publish
+      if: steps.guard.outputs.skip != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
@@ -350,6 +410,10 @@ runs:
         STATE_FILE: ${{ runner.temp }}/codex-review-state.json
         PREVIOUS_SHA: ${{ steps.history.outputs.previous-sha }}
         INCREMENTAL_NOTE: ${{ steps.history.outputs.note }}
+        SUGGESTIONS: ${{ inputs.suggestions }}
+        INCLUDE_PATHS: ${{ inputs.include-paths }}
+        EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
+        SIZE_NOTE: ${{ steps.guard.outputs.note }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/publish_review.py"
 
     # The review is posted even when fail-on-priority fails the step above, so

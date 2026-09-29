@@ -4,6 +4,8 @@ This project follows [semantic versioning](https://semver.org). The `v1` tag alw
 
 ## Unreleased
 
+### Added
+
 - Real token usage and a cost estimate on every review. Codex reports zero usage in review mode, so [`scripts/usage.py`](scripts/usage.py) reads the counts from the session rollout Codex writes in `CODEX_HOME` (the review no longer runs `--ephemeral`) and prices them from a built-in table, long-context requests included. The meta line gains `36,615 input (29,312 cached) + 926 output tokens · ~$0.03`.
 - New outputs `input-tokens`, `cached-input-tokens`, `output-tokens` and `estimated-cost-usd`.
 - New input `pricing` to price a model the built-in table doesn't know.
@@ -14,6 +16,13 @@ This project follows [semantic versioning](https://semver.org). The `v1` tag alw
 - Inline threads of fixed findings are resolved on GitHub (`resolve-fixed-threads`, default `true`; best effort, never fails the review).
 - New `incremental` input (default `false`): review only the commits pushed since the last Codex review, noted in the meta line. Findings in files those commits did not touch are carried forward as "still open, not re-checked" instead of counted as fixed, and a force-push falls back to a full review.
 - New output `resolved-count`; `findings-file` entries gained `fingerprint`.
+- Suggested fixes (`suggestions`, on by default): Codex is asked to attach the full replacement for the lines it flagged as a fenced `suggestion` block. Inline comments pass it through as a committable GitHub suggestion only when the comment anchors exactly those lines; everywhere else it is rendered as a plain "Suggested fix" code block. Findings with a fix are marked in the issues table, and `findings-file` gains a `suggestion` field.
+- Path filters `include-paths` and `exclude-paths` (glob patterns, newline or comma separated, `**` supported). Findings outside the filter are dropped, reported as the new `path-filtered-count` output and noted under the review; exclusions are also passed to Codex so it skips those files.
+- Large-PR guard `max-changed-lines` with `large-pr` (`warn` or `skip`). The changed-line count is taken between the merge base and HEAD before Codex runs and exposed as the new `changed-lines` output; `skip` posts a short note and finishes without calling Codex.
+
+### Fixed
+
+- Finding explanations are dedented as a block instead of line by line, so fenced code inside them keeps its indentation.
 
 ## v1.0.0 (2026-09-30)
 

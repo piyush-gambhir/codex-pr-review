@@ -38,6 +38,24 @@ class WriteConfigTest(unittest.TestCase):
         self.assertIn("Check tenant scoping.", cfg["developer_instructions"])
         self.assertEqual(cfg["model_verbosity"], "low")
 
+    def test_suggestion_guidance_only_when_asked_for(self):
+        cfg = tomllib.loads(wc.build_config({**BASE, "SUGGESTIONS": "true"}))
+        self.assertIn("tagged 'suggestion'", cfg["developer_instructions"])
+        self.assertIn("Full review comments:", cfg["developer_instructions"])
+        self.assertNotIn("developer_instructions", tomllib.loads(wc.build_config({**BASE, "SUGGESTIONS": "false"})))
+
+    def test_excluded_paths_are_passed_on_to_codex(self):
+        cfg = tomllib.loads(wc.build_config({**BASE, "EXCLUDE_PATHS": "**/gen/**, *.lock"}))
+        self.assertIn("**/gen/**, *.lock", cfg["developer_instructions"])
+        self.assertNotIn("tagged 'suggestion'", cfg["developer_instructions"])
+
+    def test_guidelines_exclusions_and_suggestions_together(self):
+        env = {**BASE, "REVIEW_INSTRUCTIONS": "Money is integer cents.",
+               "EXCLUDE_PATHS": "src/gen/**", "SUGGESTIONS": "true"}
+        text = tomllib.loads(wc.build_config(env))["developer_instructions"]
+        for expected in ("Money is integer cents.", "src/gen/**", "tagged 'suggestion'", "Full review comments:"):
+            self.assertIn(expected, text)
+
     def test_missing_instructions_file(self):
         with self.assertRaises(SystemExit):
             wc.build_config({**BASE, "GITHUB_WORKSPACE": "/nonexistent", "REVIEW_INSTRUCTIONS_FILE": "x.md"})

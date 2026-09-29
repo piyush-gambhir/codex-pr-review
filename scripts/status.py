@@ -3,6 +3,7 @@
 
     status.py start  posts an "in progress" comment (id written to GITHUB_OUTPUT)
     status.py done   removes that comment and reacts to the request with a rocket
+    status.py skip   posts a note that the pull request is too large to review
     status.py fail   turns that comment (or a new one) into a failure note with
                      the reason and a link to the run, and reacts with "confused"
 
@@ -66,6 +67,16 @@ def main(action: str) -> int:
         if status_id:
             github("DELETE", f"/repos/{repo}/issues/comments/{status_id}", token)
         react(repo, token, trigger_id, "rocket")
+    elif action == "skip":
+        # The size guard decided not to review at all; there is no progress note
+        # yet, so this is the only thing the pull request gets.
+        body = (
+            f"{STATUS_MARKER}\n\u23ed\ufe0f **{ctx.title} skipped**\n\n"
+            f"PR too large to review ({env.get('CHANGED_LINES', '?')} changed lines, "
+            f"limit {env.get('MAX_CHANGED_LINES', '?')}).\n\n"
+            f"<sub>{ctx.meta('Skipped')}</sub>" + (f"\n<sub>{ctx.rerun_hint}</sub>" if ctx.rerun_hint else "")
+        )
+        github("POST", f"/repos/{repo}/issues/{pr}/comments", token, {"body": body})
     elif action == "fail":
         reason = failure_reason(env.get("EVENTS_FILE", ""))
         detail = f"\n\n```\n{reason}\n```" if reason else ""

@@ -52,6 +52,17 @@ class StatusTest(unittest.TestCase):
         self.assertEqual(calls[1][1], "/repos/o/r/issues/comments/7/reactions")
         self.assertEqual(calls[1][3], {"content": "confused"})
 
+    def test_skip_posts_a_size_note(self):
+        calls = []
+        env = {**ENV, "CHANGED_LINES": "1200", "MAX_CHANGED_LINES": "500"}
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(status, "github", side_effect=lambda *a, **k: calls.append(a)):
+            status.main("skip")
+        self.assertEqual(calls[0][:2], ("POST", "/repos/o/r/issues/5/comments"))
+        self.assertIn("PR too large to review (1200 changed lines, limit 500).", calls[0][3]["body"])
+        self.assertIn("skipped", calls[0][3]["body"])
+        self.assertEqual(len(calls), 1)  # nothing to delete, no reaction
+
     def test_done_deletes_note_and_reacts(self):
         calls = []
         with mock.patch.dict(os.environ, {**ENV, "STATUS_COMMENT_ID": "42", "TRIGGER_COMMENT_ID": "7"}, clear=True), \

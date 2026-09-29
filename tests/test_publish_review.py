@@ -8,6 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 import publish_review as pr  # noqa: E402
+import suggestions  # noqa: E402
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 WORKSPACE = "/home/runner/work/repo/repo"
@@ -40,6 +41,23 @@ class ParseTest(unittest.TestCase):
         text = f"S.\n\nFull review comments:\n\n- [P0] Crash \u2014 {WORKSPACE}/a/b.py:3-7\n  One.\n  Two.\n"
         _, findings = pr.parse_review(text, WORKSPACE)
         self.assertEqual((findings[0]["path"], findings[0]["body"]), ("a/b.py", "One.\nTwo."))
+
+    def test_suggestion_blocks_survive_parsing(self):
+        # Captured from `codex exec review` 0.159.1 with the suggestions guidance on.
+        _, findings = pr.parse_review((FIXTURES / "review-suggestions.md").read_text(), WORKSPACE)
+        self.assertEqual([bool(f["suggestion"]) for f in findings], [True, False, True])
+        # The replacement keeps the source file's own two-space indentation.
+        self.assertEqual(findings[0]["suggestion"], "  const discounted = subtotal - subtotal * (percent / 100);")
+        self.assertNotIn("suggestion", findings[0]["body"])
+        self.assertTrue(findings[0]["body"].endswith("before applying it."))
+
+    def test_body_indentation_is_only_dedented_by_its_common_indent(self):
+        text = (
+            f"S.\n\nFull review comments:\n\n- [P0] Crash \u2014 a/b.py:3-4\n"
+            "  Because:\n  ```suggestion\n      deeply = 1\n  ```\n"
+        )
+        _, findings = pr.parse_review(text, WORKSPACE)
+        self.assertEqual(findings[0]["suggestion"], "    deeply = 1")
 
     def test_priority_values(self):
         self.assertEqual(pr.parse_priority("P1", None), 1)
@@ -107,22 +125,110 @@ class RenderTest(unittest.TestCase):
         self.assertIn("a \\| b", pr.issues_table([f], ctx(), set()))
 
 
+class SuggestionRenderTest(unittest.TestCase):
+    def setUp(self):
+        _, self.findings = pr.parse_review((FIXTURES / "review-suggestions.md").read_text(), WORKSPACE)
+        self.fixed, self.plain = self.findings[0], self.findings[1]
+
+    def test_exact_range_passes_the_block_through_to_github(self):
+        text = pr.inline_comment(self.fixed, ctx(), exact_range=True)
+        self.assertIn("```suggestion\n  const discounted", text)
+        self.assertNotIn("**Suggested fix**", text)
+
+    def test_mismatched_range_cannot_be_applied(self):
+        text = pr.inline_comment(self.fixed, ctx(), exact_range=False)
+        self.assertNotIn("```suggestion", text)
+        self.assertIn("**Suggested fix** (replaces `e2e/pricing.ts:16`)", text)
+        self.assertIn("  const discounted", text)
+
+    def test_suggestions_turned_off_keeps_it_as_a_code_block(self):
+        text = pr.inline_comment(self.fixed, ctx(), exact_range=True, native=False)
+        self.assertNotIn("```suggestion", text)
+        self.assertIn("**Suggested fix**", text)
+
+    def test_findings_without_a_suggestion_are_unchanged(self):
+        self.assertEqual(pr.suggestion_block(self.plain), "")
+        self.assertNotIn("Suggested fix", pr.inline_comment(self.plain, ctx()))
+
+    def test_details_never_carry_an_applicable_suggestion(self):
+        text = pr.details(self.fixed, ctx())
+        self.assertNotIn("```suggestion", text)
+        self.assertIn("**Suggested fix**", text)
+        self.assertNotIn("(replaces", text)  # the location is already in the block
+
+    def test_table_marks_findings_that_carry_a_fix(self):
+        rows = pr.issues_table(self.findings, ctx(), set()).splitlines()[2:]
+        marked = [suggestions.TABLE_MARKER in row for row in rows]
+        self.assertEqual(marked, [True, False, True])
+
+    def test_review_anchors_a_range_before_passing_a_suggestion_through(self):
+        """A range finding only gets a native suggestion when both ends are in the diff."""
+        wide = dict(self.fixed, start=14, end=16)
+        posted = {}
+        with mock.patch.object(pr, "commentable_lines", return_value={"e2e/pricing.ts": {14, 15, 16}}), \
+                mock.patch.object(pr, "github", side_effect=lambda *a, **k: posted.update(a[3]) or {}):
+            pr.post_review("o/r", "1", "t", "S.", [wide], ctx())
+        self.assertEqual(posted["comments"][0]["start_line"], 14)
+        self.assertIn("```suggestion", posted["comments"][0]["body"])
+
+        posted.clear()
+        with mock.patch.object(pr, "commentable_lines", return_value={"e2e/pricing.ts": {16}}), \
+                mock.patch.object(pr, "github", side_effect=lambda *a, **k: posted.update(a[3]) or {}):
+            pr.post_review("o/r", "1", "t", "S.", [wide], ctx())
+        self.assertNotIn("start_line", posted["comments"][0])
+        self.assertNotIn("```suggestion", posted["comments"][0]["body"])
+        self.assertIn("replaces `e2e/pricing.ts:14-16`", posted["comments"][0]["body"])
+
+
+class PathFilterMainTest(unittest.TestCase):
+    """include-paths and exclude-paths drop findings after parsing."""
+
+    def run_main(self, **env):
+        return run_publish((FIXTURES / "review-prefixed-relative.md").read_text(), **env)
+
+    def test_exclude_drops_findings_and_notes_it(self):
+        _, outputs, findings, summary = self.run_main(EXCLUDE_PATHS="**/pricing.ts")
+        self.assertEqual((outputs["findings-count"], outputs["path-filtered-count"]), ("0", "3"))
+        self.assertEqual(findings, [])
+        self.assertIn("3 findings outside the reviewed paths not shown", summary)
+
+    def test_include_keeps_only_matching_findings(self):
+        _, outputs, _, _ = self.run_main(INCLUDE_PATHS="src/**")
+        self.assertEqual((outputs["findings-count"], outputs["path-filtered-count"]), ("3", "0"))
+        _, outputs, _, _ = self.run_main(INCLUDE_PATHS="lib/**")
+        self.assertEqual((outputs["findings-count"], outputs["path-filtered-count"]), ("0", "3"))
+
+    def test_no_filter_keeps_everything(self):
+        _, outputs, _, summary = self.run_main()
+        self.assertEqual((outputs["findings-count"], outputs["path-filtered-count"]), ("3", "0"))
+        self.assertNotIn("outside the reviewed paths", summary)
+
+    def test_size_note_reaches_the_footer(self):
+        _, _, _, summary = self.run_main(SIZE_NOTE="Large PR: 900 changed lines, over the 500 line limit.")
+        self.assertIn("Large PR: 900 changed lines", summary)
+
+
+def run_publish(review_text, **env):
+    """Run publish_review.main() on one review, returning (code, outputs, findings, summary)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        review = pathlib.Path(tmp, "review.md")
+        review.write_text(review_text)
+        out, summary = pathlib.Path(tmp, "out"), pathlib.Path(tmp, "summary")
+        base = {
+            "REVIEW_FILE": str(review), "GITHUB_REPOSITORY": "o/r", "PR_NUMBER": "1",
+            "HEAD_SHA": SHA, "REVIEW_WORKSPACE": WORKSPACE, "POST_MODE": "none",
+            "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary), "RUNNER_TEMP": tmp,
+        }
+        with mock.patch.dict(os.environ, {**base, **env}, clear=True):
+            code = pr.main()
+        outputs = dict(line.split("=", 1) for line in out.read_text().splitlines())
+        findings = json.loads(pathlib.Path(outputs["findings-file"]).read_text())
+        return code, outputs, findings, summary.read_text()
+
+
 class MainTest(unittest.TestCase):
     def run_main(self, review_text, **env):
-        with tempfile.TemporaryDirectory() as tmp:
-            review = pathlib.Path(tmp, "review.md")
-            review.write_text(review_text)
-            out, summary = pathlib.Path(tmp, "out"), pathlib.Path(tmp, "summary")
-            base = {
-                "REVIEW_FILE": str(review), "GITHUB_REPOSITORY": "o/r", "PR_NUMBER": "1",
-                "HEAD_SHA": SHA, "REVIEW_WORKSPACE": WORKSPACE, "POST_MODE": "none",
-                "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary), "RUNNER_TEMP": tmp,
-            }
-            with mock.patch.dict(os.environ, {**base, **env}, clear=True):
-                code = pr.main()
-            outputs = dict(line.split("=", 1) for line in out.read_text().splitlines())
-            findings = json.loads(pathlib.Path(outputs["findings-file"]).read_text())
-            return code, outputs, findings, summary.read_text()
+        return run_publish(review_text, **env)
 
     def test_outputs_and_summary(self):
         code, outputs, findings, summary = self.run_main((FIXTURES / "review-two-findings.md").read_text())

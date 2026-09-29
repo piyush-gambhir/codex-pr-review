@@ -180,6 +180,10 @@ jobs:
           review-instructions-file: ${{ hashFiles('trusted/.github/codex-review.md') != '' && 'trusted/.github/codex-review.md' || '' }}
           max-priority: P3
           # fail-on-priority: P1   # uncomment to fail the check on P0/P1 findings
+          # exclude-paths: |       # uncomment to skip generated or vendored code
+          #   **/gen/**
+          #   *.lock
+          # max-changed-lines: 3000  # uncomment to note (or skip: large-pr) oversized PRs
           # Optional extras, each needing the permission noted above:
           #   check-run: true             # check run with annotations (checks: write)
           #   sarif-file: codex-review.sarif  # then upload it with the step below
