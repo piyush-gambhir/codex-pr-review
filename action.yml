@@ -59,6 +59,12 @@ inputs:
   fail-on-priority:
     description: "Fail the step when a reported finding is at this priority or higher, e.g. `P1`. Empty never fails on findings."
     default: ""
+  resolve-fixed-threads:
+    description: "Resolve the inline threads of findings the new review no longer reports. Best effort; never fails the review."
+    default: "true"
+  incremental:
+    description: "Review only the commits pushed since the last Codex review on this pull request. Falls back to a full review when that commit is no longer in the branch's history."
+    default: "false"
 
   # Output
   post-mode:
@@ -104,6 +110,9 @@ outputs:
   filtered-count:
     description: "Findings hidden by max-priority."
     value: ${{ steps.publish.outputs.filtered-count }}
+  resolved-count:
+    description: "Previous findings no longer reported (fixed since the last Codex review)."
+    value: ${{ steps.publish.outputs.resolved-count }}
   findings-file:
     description: "Path of a JSON file with the reported findings (priority, title, path, start, end, body)."
     value: ${{ steps.publish.outputs.findings-file }}
@@ -166,6 +175,23 @@ runs:
         RERUN_HINT: ${{ inputs.rerun-hint }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/status.py" start
 
+    # Reads the state marker in the last Codex review on this pull request, so
+    # this run can report what got fixed and, with `incremental`, review only
+    # the commits pushed since then.
+    - name: Read the previous review
+      id: history
+      if: inputs.post-mode != 'none'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        BASE_REF: ${{ inputs.base-ref }}
+        INCREMENTAL: ${{ inputs.incremental }}
+        STATE_FILE: ${{ runner.temp }}/codex-review-state.json
+      run: python3 "$GITHUB_ACTION_PATH/scripts/history.py" plan
+
     # Installed into RUNNER_TEMP with install scripts disabled, so nothing from
     # the pull request can influence the reviewer binary.
     - name: Install Codex CLI
@@ -219,7 +245,7 @@ runs:
         AWS_SECRET_ACCESS_KEY: ${{ steps.aws.outputs.aws-secret-access-key }}
         AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
         CODEX_HOME: ${{ runner.temp }}/codex-home
-        BASE_REF: ${{ inputs.base-ref }}
+        BASE_REF: ${{ steps.history.outputs.review-base || inputs.base-ref }}
       run: |
         review_file="$RUNNER_TEMP/codex-review.md"
         events_file="$RUNNER_TEMP/codex-review-events.jsonl"
@@ -265,6 +291,10 @@ runs:
         HIDE_PREVIOUS: ${{ inputs.hide-previous }}
         MAX_PRIORITY: ${{ inputs.max-priority }}
         FAIL_ON_PRIORITY: ${{ inputs.fail-on-priority }}
+        RESOLVE_FIXED_THREADS: ${{ inputs.resolve-fixed-threads }}
+        STATE_FILE: ${{ runner.temp }}/codex-review-state.json
+        PREVIOUS_SHA: ${{ steps.history.outputs.previous-sha }}
+        INCREMENTAL_NOTE: ${{ steps.history.outputs.note }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/publish_review.py"
 
     # The review is posted even when fail-on-priority fails the step above, so

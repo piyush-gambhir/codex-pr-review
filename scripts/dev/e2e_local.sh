@@ -68,6 +68,14 @@ post() { [ "${DRY_RUN:-0}" = "1" ] || "$@"; }
 post python3 "$root/scripts/status.py" start
 export STATUS_COMMENT_ID="$(sed -n 's/^status-comment-id=//p' "$GITHUB_OUTPUT" | tail -1)"
 
+# Previous review state: sets the base ref (incremental) and what got fixed.
+export STATE_FILE="$run/codex-review-state.json"
+export INCREMENTAL="${INCREMENTAL:-false}" RESOLVE_FIXED_THREADS="${RESOLVE_FIXED_THREADS:-true}"
+(cd "$checkout" && python3 "$root/scripts/history.py" plan)
+export BASE_REF="$(sed -n 's/^review-base=//p' "$GITHUB_OUTPUT" | tail -1)"
+export PREVIOUS_SHA="$(sed -n 's/^previous-sha=//p' "$GITHUB_OUTPUT" | tail -1)"
+export INCREMENTAL_NOTE="$(sed -n 's/^note=//p' "$GITHUB_OUTPUT" | tail -1)"
+
 # Codex home with the local login; config comes from write_config.py. The
 # ChatGPT login picks its own model, so the model line is dropped.
 export CODEX_HOME="$run/codex-home"

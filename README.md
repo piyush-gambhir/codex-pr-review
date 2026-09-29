@@ -36,7 +36,7 @@ Comment `@gpt review` on a pull request. About a minute later you get a review w
 - **Issues table**: every finding with its priority (P0 to P3) and a `file:lines` link pinned to the reviewed commit.
 - **Inline comments** on the exact diff lines (including multi-line ranges); findings outside the diff appear as collapsible details, so nothing is lost.
 - **Progress and failures on the PR**: a "🔍 in progress" note (with a link to the live run) is replaced by the review. If anything fails, it becomes "❌ failed" with the actual error. The requesting comment gets 👀, then 🚀 or 😕.
-- **Re-reviews stay tidy**: earlier Codex comments are collapsed as outdated.
+- **Re-reviews stay tidy**: earlier Codex comments are collapsed as outdated, fixed findings are listed as resolved and their inline threads are resolved on GitHub.
 - **Next steps** under every review: how to re-run, go deeper, or switch provider.
 
 ## Quick start
@@ -74,6 +74,16 @@ You can also pass rules inline with `review-instructions`.
 
 - `max-priority: P1` reports only P0 and P1 findings; the number hidden is noted under the review.
 - `fail-on-priority: P1` fails the step when a P0 or P1 finding is reported. Make the check required if it should block merging. The review is still posted.
+
+### Re-reviews
+
+Every posted review carries a hidden state marker with the reviewed commit and a fingerprint per finding (the path plus the meaningful words of the title, so it survives line shifts and small rewordings). The next review reads the most recent marker on the pull request and uses it to:
+
+- list what is gone under **Resolved since last review** (collapsed once it gets long) and count it in the verdict line, e.g. `2 issues to address (2 P1) · 3 resolved`;
+- tag findings reported again as **still open** in the issues table;
+- resolve the inline threads of fixed findings, so only live feedback is left open. Turn that off with `resolve-fixed-threads: false`.
+
+With `incremental: true` a re-review looks only at the commits pushed since the last review (`--base <previous sha>`), which is faster and cheaper on long-running PRs; the meta line then says `Incremental: abc1234..def5678`. Findings in files those commits didn't touch are not re-checked, so they are carried forward as **still open, not re-checked** rather than counted as fixed. If the previous commit is no longer in the branch's history (a force-push), the run falls back to a full review and says so.
 
 ### Output
 
@@ -141,6 +151,8 @@ The example workflow detects the variable, mints an app token with `actions/crea
 | `review-instructions-file` | | Guidelines file, relative to the workspace |
 | `max-priority` | `P3` | Lowest priority to report |
 | `fail-on-priority` | | Fail the step when a finding at this priority or higher is reported |
+| `resolve-fixed-threads` | `true` | Resolve the inline threads of findings no longer reported |
+| `incremental` | `false` | Review only the commits pushed since the last Codex review |
 | **Output** | | |
 | `post-mode` | `review` | `review`, `comment` or `none` |
 | `hide-previous` | `true` | Collapse earlier Codex comments as outdated |
@@ -161,7 +173,8 @@ The example workflow detects the variable, mints an app token with `actions/crea
 | `findings-count` | Findings reported (after `max-priority`) |
 | `highest-priority` | e.g. `P1`; empty when clean |
 | `filtered-count` | Findings hidden by `max-priority` |
-| `findings-file` | JSON file: `priority`, `title`, `path`, `start`, `end`, `body` per finding |
+| `resolved-count` | Previous findings no longer reported (fixed since the last review) |
+| `findings-file` | JSON file: `priority`, `title`, `path`, `start`, `end`, `body`, `fingerprint` per finding |
 | `review-file` | Codex's raw review message |
 
 ## Models and prices
@@ -178,11 +191,12 @@ Standard OpenAI API rates, which Bedrock matches. Input above 272K tokens is bil
 ## How it works
 
 1. **Progress note**: posted on the PR with a link to the run.
-2. **Install**: the pinned Codex CLI goes into `RUNNER_TEMP` with npm install scripts disabled.
-3. **Credentials**: for `bedrock`, `aws-actions/configure-aws-credentials` assumes the role via OIDC and returns credentials as step outputs. For `openai`, the key is passed as `CODEX_API_KEY`. Only the review step receives them, and no GitHub token reaches Codex.
-4. **Config**: [`scripts/write_config.py`](scripts/write_config.py) writes Codex's `config.toml`: provider, model, effort, a read-only sandbox, no approvals, your guidelines, and a minimal environment (`shell_environment_policy.inherit = "core"`) so commands Codex runs never see the credentials.
-5. **Review**: `codex exec review --base <base-ref>` reviews the diff against the merge base.
-6. **Publish**: [`scripts/publish_review.py`](scripts/publish_review.py) parses the findings and posts the review. If GitHub rejects an inline anchor, everything goes in the body instead. [`scripts/status.py`](scripts/status.py) then clears the progress note, or turns it into a failure note. A failed or empty review never looks like a pass.
+2. **Previous review**: [`scripts/history.py`](scripts/history.py) reads the state marker in the last Codex review on the PR, and with `incremental` checks whether that commit is still an ancestor of the head.
+3. **Install**: the pinned Codex CLI goes into `RUNNER_TEMP` with npm install scripts disabled.
+4. **Credentials**: for `bedrock`, `aws-actions/configure-aws-credentials` assumes the role via OIDC and returns credentials as step outputs. For `openai`, the key is passed as `CODEX_API_KEY`. Only the review step receives them, and no GitHub token reaches Codex.
+5. **Config**: [`scripts/write_config.py`](scripts/write_config.py) writes Codex's `config.toml`: provider, model, effort, a read-only sandbox, no approvals, your guidelines, and a minimal environment (`shell_environment_policy.inherit = "core"`) so commands Codex runs never see the credentials.
+6. **Review**: `codex exec review --base <base-ref>` reviews the diff against the merge base.
+7. **Publish**: [`scripts/publish_review.py`](scripts/publish_review.py) parses the findings and posts the review. If GitHub rejects an inline anchor, everything goes in the body instead. [`scripts/status.py`](scripts/status.py) then clears the progress note, or turns it into a failure note. A failed or empty review never looks like a pass. Fixed findings are listed as resolved and their threads are resolved, best effort.
 
 ## Security
 
@@ -203,6 +217,7 @@ The tests cover:
 - filtering, gating and rendering
 - status notes
 - config generation
+- fingerprints, state round trips, resolved versus still-open classification (full and incremental) and thread matching
 
 ## License
 

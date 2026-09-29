@@ -27,6 +27,8 @@ import sys
 import urllib.error
 import urllib.request
 
+import history
+
 API = os.environ.get("GITHUB_API_URL", "https://api.github.com")
 GRAPHQL = os.environ.get("GITHUB_GRAPHQL_URL", "https://api.github.com/graphql")
 MARKER = "<!-- codex-pr-review -->"
@@ -175,6 +177,13 @@ class Context:
         self.run_url = env.get("RUN_URL", "").strip()
         self.rerun_hint = env.get("RERUN_HINT", "").strip()
         self.note = ""
+        # Re-review awareness, filled in from the previous review's state.
+        self.previous_sha = env.get("PREVIOUS_SHA", "").strip()
+        self.scope_note = env.get("INCREMENTAL_NOTE", "").strip()
+        self.resolved: list[dict] = []
+        self.carried: list[dict] = []
+        self.still_open: set[str] = set()
+        self.state = ""
 
     def commit_link(self) -> str:
         short = self.head_sha[:7]
@@ -185,6 +194,8 @@ class Context:
         if self.base:
             reviewed += f" against `{self.base}`"
         parts = [reviewed]
+        if self.scope_note:
+            parts.append(self.scope_note)
         if self.model:
             parts.append(f"`{self.model}`" + (f" via {self.label}" if self.label else ""))
         if self.effort:
@@ -218,23 +229,25 @@ def plural(count: int, word: str) -> str:
     return f"{count} {word}{'' if count == 1 else 's'}"
 
 
-def verdict(findings: list[dict]) -> str:
+def verdict(findings: list[dict], resolved: int = 0) -> str:
+    fixed = f" \u00b7 {resolved} resolved" if resolved else ""
     if not findings:
-        return "\u2705 **No issues found.**"
+        return f"\u2705 **No issues found.**{fixed}"
     counts = ", ".join(
         f"{sum(f['priority'] == p for f in findings)} P{p}" for p in range(4) if any(f["priority"] == p for f in findings)
     )
     worst = min(f["priority"] for f in findings)
     if worst <= 1:
-        return f"{PRIORITY_ICON[worst]} **{plural(len(findings), 'issue')} to address** ({counts})"
-    return f"{PRIORITY_ICON[worst]} **{plural(len(findings), 'minor issue')}** ({counts})"
+        return f"{PRIORITY_ICON[worst]} **{plural(len(findings), 'issue')} to address** ({counts}){fixed}"
+    return f"{PRIORITY_ICON[worst]} **{plural(len(findings), 'minor issue')}** ({counts}){fixed}"
 
 
 def inline_comment(finding: dict, ctx: Context) -> str:
     icon = PRIORITY_ICON.get(finding["priority"], "\u26aa")
     return (
         f"{icon} **P{finding['priority']} \u00b7 {finding['title']}**\n\n{finding['body']}\n\n"
-        f"<sub>{ctx.title} \u00b7 {location(finding, ctx)}</sub>\n{MARKER}"
+        f"<sub>{ctx.title} \u00b7 {location(finding, ctx)}</sub>\n"
+        f"{history.finding_marker(history.entry(finding)['fp'])}\n{MARKER}"
     )
 
 
@@ -249,6 +262,8 @@ def issues_table(findings: list[dict], ctx: Context, inline_ids: set[int]) -> st
     rows = ["| | Priority | Issue | Location | |", "|---|---|---|---|---|"]
     for finding in findings:
         title = finding["title"].replace("|", "\\|")
+        if finding.get("fingerprint") in ctx.still_open:
+            title += " <sub>(still open)</sub>"
         where = "\U0001f4ac inline" if id(finding) in inline_ids else "\u2b07\ufe0f below"
         icon = PRIORITY_ICON.get(finding["priority"], "\u26aa")
         rows.append(
@@ -261,14 +276,17 @@ def issues_table(findings: list[dict], ctx: Context, inline_ids: set[int]) -> st
 def body_markdown(summary: str, findings: list[dict], ctx: Context, inline_ids: set[int] | None = None) -> str:
     """Verdict, summary, the full issues table, collapsible details, then meta and next steps."""
     inline_ids = inline_ids or set()
-    parts = [MARKER, f"## {ctx.title}", verdict(findings), summary]
+    parts = [MARKER, f"## {ctx.title}", verdict(findings, len(ctx.resolved)), summary]
     if findings:
         parts.append(issues_table(findings, ctx, inline_ids))
         detailed = [f for f in findings if id(f) not in inline_ids]
         if detailed:
             parts.append("**Details**" if inline_ids else "**Details** (click to expand)")
             parts.extend(details(f, ctx) for f in detailed)
+    if ctx.resolved or ctx.carried:
+        parts.append(history.resolved_section(ctx.resolved, ctx.carried, ctx))
     parts.append(ctx.footer())
+    parts.append(ctx.state)
     return "\n\n".join(p for p in parts if p)
 
 
@@ -278,7 +296,7 @@ def set_output(key: str, value: str) -> None:
             out.write(f"{key}={value}\n")
 
 
-def write_outputs(findings: list[dict], filtered_out: int) -> None:
+def write_outputs(findings: list[dict], filtered_out: int, resolved: int = 0) -> None:
     findings_file = pathlib.Path(os.environ.get("RUNNER_TEMP", ".")) / "codex-review-findings.json"
     findings_file.write_text(json.dumps(findings, indent=2), encoding="utf-8")
     highest = f"P{min(f['priority'] for f in findings)}" if findings else ""
@@ -287,6 +305,7 @@ def write_outputs(findings: list[dict], filtered_out: int) -> None:
         "highest-priority": highest,
         "findings-file": str(findings_file),
         "filtered-count": str(filtered_out),
+        "resolved-count": str(resolved),
     }
     for key, value in outputs.items():
         set_output(key, value)
@@ -296,7 +315,8 @@ def write_summary(summary: str, findings: list[dict], ctx: Context) -> None:
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     if path:
         with open(path, "a", encoding="utf-8") as out:
-            out.write(body_markdown(summary, findings, ctx).replace(MARKER, "").strip() + "\n")
+            body = history.strip_state(body_markdown(summary, findings, ctx))
+            out.write(body.replace(MARKER, "").strip() + "\n")
 
 
 # Main ------------------------------------------------------------------------
@@ -321,13 +341,27 @@ def main() -> int:
     summary, all_findings = parse_review(text, env.get("REVIEW_WORKSPACE", ""))
     if not all_findings:
         summary = text  # unstructured message, usually "no issues"
+    for finding in all_findings:
+        finding["fingerprint"] = history.fingerprint(finding["path"], finding["title"])
     findings = sorted((f for f in all_findings if f["priority"] <= max_priority), key=lambda f: f["priority"])
     filtered_out = len(all_findings) - len(findings)
     print(f"Parsed {len(all_findings)} finding(s); {len(findings)} at P{max_priority} or above.")
     if filtered_out:
         ctx.note = f"{plural(filtered_out, 'lower-priority finding')} below P{max_priority} not shown."
 
-    write_outputs(findings, filtered_out)
+    # What the previous review reported, so this one can say what got fixed.
+    plan = history.load_plan(env.get("STATE_FILE", ""))
+    previous = plan.get("previous") or {}
+    ctx.previous_sha = ctx.previous_sha or previous.get("sha", "")
+    ctx.resolved, ctx.carried, ctx.still_open = history.classify(
+        previous.get("findings") or [], findings, plan.get("changed-files")
+    )
+    ctx.state = history.state_marker(ctx.head_sha, findings, ctx.carried)
+    if previous:
+        print(f"Since {history.short(ctx.previous_sha)}: {len(ctx.resolved)} resolved, "
+              f"{len(ctx.still_open)} still open, {len(ctx.carried)} not re-checked.")
+
+    write_outputs(findings, filtered_out, len(ctx.resolved))
     write_summary(summary, findings, ctx)
 
     if mode != "none":
@@ -339,6 +373,9 @@ def main() -> int:
         else:
             post_review(repo, pr, token, summary, findings, ctx)
         set_output("posted", "true")
+        if ctx.resolved and env.get("RESOLVE_FIXED_THREADS", "true").strip().lower() == "true":
+            fixed = {item["fp"] for item in ctx.resolved}
+            print(f"Resolved {history.resolve_threads(repo, pr, token, fixed, github, GRAPHQL)} fixed thread(s).")
 
     if fail_on is not None and findings and min(f["priority"] for f in findings) <= fail_on:
         print(f"::error::Codex found P{min(f['priority'] for f in findings)} issues (fail-on-priority is P{fail_on}).")
