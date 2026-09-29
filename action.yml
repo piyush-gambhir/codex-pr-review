@@ -103,6 +103,11 @@ runs:
         model_reasoning_effort = "$REASONING_EFFORT"
         sandbox_mode = "$SANDBOX"
         approval_policy = "never"
+
+        # Commands Codex runs while reviewing get only a minimal environment,
+        # never the AWS credentials this step holds.
+        [shell_environment_policy]
+        inherit = "core"
         EOF
 
         review_file="$RUNNER_TEMP/codex-review.md"

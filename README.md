@@ -17,6 +17,9 @@ Findings are posted as one pull request review: inline comments on lines in the 
    model_reasoning_effort = "medium"
    sandbox_mode = "read-only"
    approval_policy = "never"
+
+   [shell_environment_policy]
+   inherit = "core"   # commands Codex runs never see the AWS credentials
    ```
 
 5. **Post**: `scripts/post_review.py` parses Codex's review message and creates the PR review with the job's `GITHUB_TOKEN`. If GitHub rejects an inline anchor, every finding goes in the review body instead. The step fails if Codex errors or returns nothing, so a broken review never looks like a pass.
