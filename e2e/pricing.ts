@@ -13,7 +13,7 @@ export function subtotalCents(items: LineItem[]): number {
 /** Applies a percentage discount (0-100) and returns the discounted total in cents. */
 export function applyDiscountCents(items: LineItem[], percent: number): number {
   const subtotal = subtotalCents(items);
-  const discounted = subtotal - subtotal * percent;
+  const discounted = subtotal - subtotal * (percent / 100);
   return Math.max(discounted, 0);
 }
 
