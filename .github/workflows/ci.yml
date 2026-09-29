@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+      - name: action.yml is valid YAML with the expected inputs
+        run: python3 -c "import yaml; d = yaml.safe_load(open('action.yml')); assert d['runs']['using'] == 'composite'; print(sorted(d['inputs']))"
       - name: Parser tests
         run: python3 -m unittest discover -s tests -v
       - name: actionlint

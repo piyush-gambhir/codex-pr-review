@@ -6,48 +6,48 @@ description: >-
 
 inputs:
   aws-role-to-assume:
-    description: IAM role ARN trusted for this repository's GitHub OIDC tokens, allowed to invoke the model.
+    description: "IAM role ARN trusted for this repository's GitHub OIDC tokens, allowed to invoke the model."
     required: true
   aws-region:
-    description: AWS region for Bedrock.
+    description: "AWS region for Bedrock."
     default: us-east-1
   model:
-    description: Bedrock model or inference profile ID.
+    description: "Bedrock model or inference profile ID."
     default: us.openai.gpt-6-sol
   model-provider:
-    description: Codex model provider. `amazon-bedrock-runtime` (inference profiles) or `amazon-bedrock` (Mantle, in-region model IDs).
+    description: "Codex model provider. `amazon-bedrock-runtime` (inference profiles) or `amazon-bedrock` (Mantle, in-region model IDs)."
     default: amazon-bedrock-runtime
   reasoning-effort:
-    description: Codex reasoning effort (low, medium, high, xhigh).
+    description: "Codex reasoning effort (low, medium, high, xhigh)."
     default: medium
   base-ref:
-    description: Git ref to review against, e.g. `origin/release`. Must exist in the checkout.
+    description: "Git ref to review against, e.g. `origin/release`. Must exist in the checkout."
     required: true
   pr-number:
-    description: Pull request number to post the review on.
+    description: "Pull request number to post the review on."
     required: true
   head-sha:
-    description: Commit SHA the review is anchored to (the checked-out PR head).
+    description: "Commit SHA the review is anchored to (the checked-out PR head)."
     required: true
   working-directory:
-    description: Path of the PR checkout, relative to the workspace.
+    description: "Path of the PR checkout, relative to the workspace."
     default: .
   sandbox:
-    description: Codex sandbox for commands it runs while reviewing (`read-only` recommended).
+    description: "Codex sandbox for commands it runs while reviewing (`read-only` recommended)."
     default: read-only
   github-token:
-    description: Token used to post the review (needs `pull-requests: write`).
+    description: "Token used to post the review (needs `pull-requests: write`)."
     default: ${{ github.token }}
   title:
-    description: Heading for the posted review.
+    description: "Heading for the posted review."
     default: Codex review
   codex-version:
-    description: Pinned `@openai/codex` version.
+    description: "Pinned `@openai/codex` version."
     default: "0.159.1"
 
 outputs:
   review-file:
-    description: Path of Codex's final review message.
+    description: "Path of Codex's final review message."
     value: ${{ steps.review.outputs.review-file }}
 
 runs:
