@@ -9,7 +9,8 @@
 #   GH_TOKEN=$(gh auth token --user <you>) scripts/dev/e2e_local.sh <owner/repo> <pr-number>
 #
 # Any environment variable the scripts read (MAX_PRIORITY, POST_MODE,
-# REVIEW_INSTRUCTIONS, FAIL_ON_PRIORITY, HIDE_PREVIOUS, ...) can be set to
+# REVIEW_INSTRUCTIONS, FAIL_ON_PRIORITY, HIDE_PREVIOUS, SUGGESTIONS,
+# INCLUDE_PATHS, EXCLUDE_PATHS, MAX_CHANGED_LINES, LARGE_PR, ...) can be set to
 # override the defaults below. DRY_RUN=1 skips everything that posts.
 set -euo pipefail
 
@@ -60,10 +61,23 @@ export RERUN_HINT="${RERUN_HINT:-local e2e run}"
 export RUNNER_TEMP="$run" GITHUB_OUTPUT="$run/output" GITHUB_STEP_SUMMARY="$run/summary.md"
 export GITHUB_WORKSPACE="$checkout" REVIEW_WORKSPACE="$checkout"
 export POST_MODE="${POST_MODE:-review}" HIDE_PREVIOUS="${HIDE_PREVIOUS:-true}"
+export SUGGESTIONS="${SUGGESTIONS:-true}"
+export INCLUDE_PATHS="${INCLUDE_PATHS:-}" EXCLUDE_PATHS="${EXCLUDE_PATHS:-}"
+export MAX_CHANGED_LINES="${MAX_CHANGED_LINES:-}" LARGE_PR="${LARGE_PR:-warn}"
 : > "$GITHUB_OUTPUT"
 echo "run dir: $run"
 
 post() { [ "${DRY_RUN:-0}" = "1" ] || "$@"; }
+
+# Size guard, the same order action.yml runs it: before anything is posted.
+(cd "$checkout" && python3 "$root/scripts/filters.py")
+export SIZE_NOTE="$(sed -n 's/^note=//p' "$GITHUB_OUTPUT" | tail -1)"
+if [ "$(sed -n 's/^skip=//p' "$GITHUB_OUTPUT" | tail -1)" = "true" ]; then
+  echo "skipping the review: over max-changed-lines"
+  CHANGED_LINES="$(sed -n 's/^changed-lines=//p' "$GITHUB_OUTPUT" | tail -1)" \
+    post python3 "$root/scripts/status.py" skip
+  exit 0
+fi
 
 post python3 "$root/scripts/status.py" start
 export STATUS_COMMENT_ID="$(sed -n 's/^status-comment-id=//p' "$GITHUB_OUTPUT" | tail -1)"

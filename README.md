@@ -34,6 +34,7 @@ Comment `@gpt review` on a pull request. About a minute later you get a review w
 
 - **Verdict first**: ✅ no issues, 🟡 minor issues, or 🟠/🔴 issues to address, with counts per priority.
 - **Issues table**: every finding with its priority (P0 to P3) and a `file:lines` link pinned to the reviewed commit.
+- **Suggested fixes**: when a fix is a small replacement of the flagged lines, it arrives as a committable GitHub suggestion (marked 💡 in the table). Anywhere the comment can't be anchored to exactly those lines it becomes a plain "Suggested fix" code block instead, so a fix is never applied to the wrong place.
 - **Inline comments** on the exact diff lines (including multi-line ranges); findings outside the diff appear as collapsible details, so nothing is lost.
 - **Progress and failures on the PR**: a "🔍 in progress" note (with a link to the live run) is replaced by the review. If anything fails, it becomes "❌ failed" with the actual error. The requesting comment gets 👀, then 🚀 or 😕.
 - **Re-reviews stay tidy**: earlier Codex comments are collapsed as outdated.
@@ -74,6 +75,41 @@ You can also pass rules inline with `review-instructions`.
 
 - `max-priority: P1` reports only P0 and P1 findings; the number hidden is noted under the review.
 - `fail-on-priority: P1` fails the step when a P0 or P1 finding is reported. Make the check required if it should block merging. The review is still posted.
+
+### Paths
+
+`include-paths` and `exclude-paths` take glob patterns, one per line or comma separated:
+
+```yaml
+include-paths: |
+  src/**/*.ts
+  api/**
+exclude-paths: |
+  **/gen/**
+  *.lock
+```
+
+- `*`, `?` and `[abc]` stay inside one path segment; `**` spans whole segments, and `src/**/*.ts` also matches `src/a.ts`.
+- A pattern with no `/` matches the file name anywhere in the tree (`*.lock` covers `web/yarn.lock`); with a `/` it is anchored at the repository root.
+- Exclusions win over inclusions. Findings outside the filter are dropped after parsing, counted in `path-filtered-count` and noted under the review, and `exclude-paths` is passed to Codex as well so it doesn't spend effort there.
+
+### Suggested fixes
+
+`suggestions: true` (the default) asks Codex to attach the full replacement for the lines it flagged as a fenced `suggestion` block. Findings that carry one are marked 💡 in the issues table.
+
+A block only becomes a real GitHub suggestion when the inline comment covers exactly the lines the fix replaces; otherwise (a range GitHub won't anchor, a finding shown in the details, or `post-mode: comment`) it is rendered as a plain "Suggested fix" code block. Set `suggestions: false` to stop asking for them, and to render any that turn up anyway as plain blocks.
+
+### Large pull requests
+
+`max-changed-lines` sets a size above which a pull request is treated as too big. The count is added plus deleted lines between the merge base of `base-ref` and HEAD, after the path filters, and is always available as the `changed-lines` output.
+
+- `large-pr: warn` (the default) reviews anyway and adds a note under the review.
+- `large-pr: skip` posts a short "PR too large to review" note and finishes successfully without calling Codex, so nothing is spent on it.
+
+```yaml
+max-changed-lines: 3000
+large-pr: skip
+```
 
 ### Output
 
@@ -136,7 +172,12 @@ The example workflow detects the variable, mints an app token with `actions/crea
 | `pr-number` | required | Pull request to post on |
 | `head-sha` | required | Commit the review is anchored to |
 | `working-directory` | `.` | Where the PR is checked out |
+| `include-paths` | | Only report findings in files matching these globs (newline or comma separated) |
+| `exclude-paths` | | Never report findings in files matching these globs; Codex is told to skip them too |
+| `max-changed-lines` | | Added plus deleted lines above which `large-pr` applies; empty means no limit |
+| `large-pr` | `warn` | Over the limit: `warn` (review anyway) or `skip` (post a note, skip the review) |
 | **Review behaviour** | | |
+| `suggestions` | `true` | Ask Codex for committable fixes as GitHub suggestions |
 | `review-instructions` | | Inline review guidelines |
 | `review-instructions-file` | | Guidelines file, relative to the workspace |
 | `max-priority` | `P3` | Lowest priority to report |
@@ -161,7 +202,9 @@ The example workflow detects the variable, mints an app token with `actions/crea
 | `findings-count` | Findings reported (after `max-priority`) |
 | `highest-priority` | e.g. `P1`; empty when clean |
 | `filtered-count` | Findings hidden by `max-priority` |
-| `findings-file` | JSON file: `priority`, `title`, `path`, `start`, `end`, `body` per finding |
+| `path-filtered-count` | Findings hidden by `include-paths` or `exclude-paths` |
+| `changed-lines` | Added plus deleted lines between the merge base and HEAD, after the path filters |
+| `findings-file` | JSON file: `priority`, `title`, `path`, `start`, `end`, `body`, `suggestion` per finding |
 | `review-file` | Codex's raw review message |
 
 ## Models and prices
@@ -177,12 +220,13 @@ Standard OpenAI API rates, which Bedrock matches. Input above 272K tokens is bil
 
 ## How it works
 
-1. **Progress note**: posted on the PR with a link to the run.
-2. **Install**: the pinned Codex CLI goes into `RUNNER_TEMP` with npm install scripts disabled.
-3. **Credentials**: for `bedrock`, `aws-actions/configure-aws-credentials` assumes the role via OIDC and returns credentials as step outputs. For `openai`, the key is passed as `CODEX_API_KEY`. Only the review step receives them, and no GitHub token reaches Codex.
-4. **Config**: [`scripts/write_config.py`](scripts/write_config.py) writes Codex's `config.toml`: provider, model, effort, a read-only sandbox, no approvals, your guidelines, and a minimal environment (`shell_environment_policy.inherit = "core"`) so commands Codex runs never see the credentials.
-5. **Review**: `codex exec review --base <base-ref>` reviews the diff against the merge base.
-6. **Publish**: [`scripts/publish_review.py`](scripts/publish_review.py) parses the findings and posts the review. If GitHub rejects an inline anchor, everything goes in the body instead. [`scripts/status.py`](scripts/status.py) then clears the progress note, or turns it into a failure note. A failed or empty review never looks like a pass.
+1. **Size guard**: [`scripts/filters.py`](scripts/filters.py) counts the changed lines between the merge base and HEAD. Over `max-changed-lines` with `large-pr: skip`, a note goes up and the remaining steps are skipped.
+2. **Progress note**: posted on the PR with a link to the run.
+3. **Install**: the pinned Codex CLI goes into `RUNNER_TEMP` with npm install scripts disabled.
+4. **Credentials**: for `bedrock`, `aws-actions/configure-aws-credentials` assumes the role via OIDC and returns credentials as step outputs. For `openai`, the key is passed as `CODEX_API_KEY`. Only the review step receives them, and no GitHub token reaches Codex.
+5. **Config**: [`scripts/write_config.py`](scripts/write_config.py) writes Codex's `config.toml`: provider, model, effort, a read-only sandbox, no approvals, your guidelines (plus the suggestion and exclusion guidance), and a minimal environment (`shell_environment_policy.inherit = "core"`) so commands Codex runs never see the credentials.
+6. **Review**: `codex exec review --base <base-ref>` reviews the diff against the merge base.
+7. **Publish**: [`scripts/publish_review.py`](scripts/publish_review.py) parses the findings and posts the review. If GitHub rejects an inline anchor, everything goes in the body instead. [`scripts/status.py`](scripts/status.py) then clears the progress note, or turns it into a failure note. A failed or empty review never looks like a pass.
 
 ## Security
 
@@ -201,6 +245,7 @@ The tests cover:
 
 - parsing real Codex output, including layouts nudged by custom guidelines
 - filtering, gating and rendering
+- suggestion blocks, path globs and the large-PR guard
 - status notes
 - config generation
 

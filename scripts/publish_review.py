@@ -27,6 +27,10 @@ import sys
 import urllib.error
 import urllib.request
 
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import filters  # noqa: E402
+import suggestions  # noqa: E402
+
 API = os.environ.get("GITHUB_API_URL", "https://api.github.com")
 GRAPHQL = os.environ.get("GITHUB_GRAPHQL_URL", "https://api.github.com/graphql")
 MARKER = "<!-- codex-pr-review -->"
@@ -43,6 +47,19 @@ HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@
 
 
 # Parsing ---------------------------------------------------------------------
+
+
+def dedent_body(lines: list[str]) -> str:
+    """Join a finding's explanation, dropping only the indent Codex adds to all of
+    it, so a fenced block inside keeps its own indentation."""
+    kept = [line.rstrip() for line in lines]
+    while kept and not kept[0]:
+        kept.pop(0)
+    while kept and not kept[-1]:
+        kept.pop()
+    indents = [len(line) - len(line.lstrip()) for line in kept if line]
+    cut = min(indents) if indents else 0
+    return "\n".join(line[cut:] for line in kept)
 
 
 def parse_review(text: str, workspace: str) -> tuple[str, list[dict]]:
@@ -66,12 +83,15 @@ def parse_review(text: str, workspace: str) -> tuple[str, list[dict]]:
                 "start": start,
                 "end": max(int(match["end"] or start), start),
                 "body": [],
+                "suggestion": "",
             }
             findings.append(current)
         elif current is not None:
-            current["body"].append(line.strip())
+            current["body"].append(line)
     for finding in findings:
-        finding["body"] = "\n".join(finding["body"]).strip()
+        # A suggestion block is always pulled out, even when the input is off, so
+        # a stray one can never reach GitHub as an applicable suggestion.
+        finding["body"], finding["suggestion"] = suggestions.extract(dedent_body(finding["body"]))
     return summary.strip(), findings
 
 
@@ -230,11 +250,29 @@ def verdict(findings: list[dict]) -> str:
     return f"{PRIORITY_ICON[worst]} **{plural(len(findings), 'minor issue')}** ({counts})"
 
 
-def inline_comment(finding: dict, ctx: Context) -> str:
+def suggestion_block(finding: dict, exact_range: bool = True, native: bool = True) -> str:
+    """A finding's suggested fix, or "" when it has none.
+
+    GitHub applies a `suggestion` block to the lines the comment is anchored to,
+    so it is only passed through when those are exactly the lines the fix
+    replaces. Anywhere else it becomes a labelled code block instead.
+    """
+    code = finding.get("suggestion") or ""
+    if not code:
+        return ""
+    if exact_range and native:
+        return suggestions.github_block(code)
+    where = f"replaces `{finding['path']}:{span(finding)}`" if not exact_range else ""
+    return suggestions.plain_block(code, where)
+
+
+def inline_comment(finding: dict, ctx: Context, exact_range: bool = True, native: bool = True) -> str:
     icon = PRIORITY_ICON.get(finding["priority"], "\u26aa")
+    fix = suggestion_block(finding, exact_range, native)
     return (
         f"{icon} **P{finding['priority']} \u00b7 {finding['title']}**\n\n{finding['body']}\n\n"
-        f"<sub>{ctx.title} \u00b7 {location(finding, ctx)}</sub>\n{MARKER}"
+        + (f"{fix}\n\n" if fix else "")
+        + f"<sub>{ctx.title} \u00b7 {location(finding, ctx)}</sub>\n{MARKER}"
     )
 
 
@@ -242,13 +280,19 @@ def details(finding: dict, ctx: Context) -> str:
     """A collapsible block for a finding that has no inline comment."""
     icon = PRIORITY_ICON.get(finding["priority"], "\u26aa")
     summary = f"{icon} <b>P{finding['priority']}</b> \u00b7 {html.escape(finding['title'])} \u00b7 <code>{html.escape(finding['path'])}:{span(finding)}</code>"
-    return f"<details>\n<summary>{summary}</summary>\n\n{location(finding, ctx)}\n\n{finding['body']}\n\n</details>"
+    # Never a native suggestion here: nothing in the body anchors to a diff line.
+    fix = suggestion_block(finding, exact_range=True, native=False)
+    parts = [location(finding, ctx), finding["body"]] + ([fix] if fix else [])
+    return f"<details>\n<summary>{summary}</summary>\n\n" + "\n\n".join(p for p in parts if p) + "\n\n</details>"
 
 
 def issues_table(findings: list[dict], ctx: Context, inline_ids: set[int]) -> str:
     rows = ["| | Priority | Issue | Location | |", "|---|---|---|---|---|"]
     for finding in findings:
         title = finding["title"].replace("|", "\\|")
+        if finding.get("suggestion"):
+            # Marks the findings that come with a ready-made fix.
+            title += f" {suggestions.TABLE_MARKER}"
         where = "\U0001f4ac inline" if id(finding) in inline_ids else "\u2b07\ufe0f below"
         icon = PRIORITY_ICON.get(finding["priority"], "\u26aa")
         rows.append(
@@ -278,7 +322,7 @@ def set_output(key: str, value: str) -> None:
             out.write(f"{key}={value}\n")
 
 
-def write_outputs(findings: list[dict], filtered_out: int) -> None:
+def write_outputs(findings: list[dict], filtered_out: int, path_filtered_out: int = 0) -> None:
     findings_file = pathlib.Path(os.environ.get("RUNNER_TEMP", ".")) / "codex-review-findings.json"
     findings_file.write_text(json.dumps(findings, indent=2), encoding="utf-8")
     highest = f"P{min(f['priority'] for f in findings)}" if findings else ""
@@ -287,6 +331,7 @@ def write_outputs(findings: list[dict], filtered_out: int) -> None:
         "highest-priority": highest,
         "findings-file": str(findings_file),
         "filtered-count": str(filtered_out),
+        "path-filtered-count": str(path_filtered_out),
     }
     for key, value in outputs.items():
         set_output(key, value)
@@ -318,16 +363,28 @@ def main() -> int:
     max_priority = parse_priority(env.get("MAX_PRIORITY", ""), 3)
     fail_on = parse_priority(env.get("FAIL_ON_PRIORITY", ""), None)
 
+    paths = filters.PathFilter.from_env(dict(env))
+    native_suggestions = env.get("SUGGESTIONS", "true").strip().lower() != "false"
+
     summary, all_findings = parse_review(text, env.get("REVIEW_WORKSPACE", ""))
     if not all_findings:
         summary = text  # unstructured message, usually "no issues"
-    findings = sorted((f for f in all_findings if f["priority"] <= max_priority), key=lambda f: f["priority"])
-    filtered_out = len(all_findings) - len(findings)
+    in_scope = [f for f in all_findings if paths.allows(f["path"])]
+    path_filtered_out = len(all_findings) - len(in_scope)
+    findings = sorted((f for f in in_scope if f["priority"] <= max_priority), key=lambda f: f["priority"])
+    filtered_out = len(in_scope) - len(findings)
     print(f"Parsed {len(all_findings)} finding(s); {len(findings)} at P{max_priority} or above.")
+    notes = []
+    if path_filtered_out:
+        print(f"Dropped {path_filtered_out} finding(s) outside include-paths/exclude-paths.")
+        notes.append(f"{plural(path_filtered_out, 'finding')} outside the reviewed paths not shown.")
     if filtered_out:
-        ctx.note = f"{plural(filtered_out, 'lower-priority finding')} below P{max_priority} not shown."
+        notes.append(f"{plural(filtered_out, 'lower-priority finding')} below P{max_priority} not shown.")
+    if env.get("SIZE_NOTE", "").strip():
+        notes.append(env["SIZE_NOTE"].strip())
+    ctx.note = " ".join(notes)
 
-    write_outputs(findings, filtered_out)
+    write_outputs(findings, filtered_out, path_filtered_out)
     write_summary(summary, findings, ctx)
 
     if mode != "none":
@@ -337,7 +394,7 @@ def main() -> int:
             github("POST", f"/repos/{repo}/issues/{pr}/comments", token, {"body": body_markdown(summary, findings, ctx)})
             print(f"Posted comment with {plural(len(findings), 'finding')}.")
         else:
-            post_review(repo, pr, token, summary, findings, ctx)
+            post_review(repo, pr, token, summary, findings, ctx, native_suggestions)
         set_output("posted", "true")
 
     if fail_on is not None and findings and min(f["priority"] for f in findings) <= fail_on:
@@ -346,16 +403,22 @@ def main() -> int:
     return 0
 
 
-def post_review(repo: str, pr: str, token: str, summary: str, findings: list[dict], ctx: Context) -> None:
+def post_review(repo: str, pr: str, token: str, summary: str, findings: list[dict], ctx: Context,
+                native_suggestions: bool = True) -> None:
     """One review: verdict and full issues table in the body, inline comments on diff lines."""
     allowed = commentable_lines(repo, pr, token)
     inline = [f for f in findings if f["end"] in allowed.get(f["path"], set())]
 
     comments = []
     for finding in inline:
-        comment = {"path": finding["path"], "line": finding["end"], "side": "RIGHT", "body": inline_comment(finding, ctx)}
+        comment = {"path": finding["path"], "line": finding["end"], "side": "RIGHT"}
+        # A single-line finding always anchors exactly; a range only when its
+        # first line is in the diff too, otherwise the comment covers just the last.
+        exact_range = finding["start"] == finding["end"]
         if finding["start"] < finding["end"] and finding["start"] in allowed[finding["path"]]:
             comment.update(start_line=finding["start"], start_side="RIGHT")
+            exact_range = True
+        comment["body"] = inline_comment(finding, ctx, exact_range, native_suggestions)
         comments.append(comment)
 
     payload = {
