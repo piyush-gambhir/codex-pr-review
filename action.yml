@@ -1,0 +1,145 @@
+name: Codex review on Amazon Bedrock
+description: >-
+  Run Codex's native code review (`codex exec review`) on OpenAI models served
+  by Amazon Bedrock, authenticated with GitHub OIDC, and post the findings as a
+  pull request review with inline comments.
+
+inputs:
+  aws-role-to-assume:
+    description: IAM role ARN trusted for this repository's GitHub OIDC tokens, allowed to invoke the model.
+    required: true
+  aws-region:
+    description: AWS region for Bedrock.
+    default: us-east-1
+  model:
+    description: Bedrock model or inference profile ID.
+    default: us.openai.gpt-6-sol
+  model-provider:
+    description: Codex model provider. `amazon-bedrock-runtime` (inference profiles) or `amazon-bedrock` (Mantle, in-region model IDs).
+    default: amazon-bedrock-runtime
+  reasoning-effort:
+    description: Codex reasoning effort (low, medium, high, xhigh).
+    default: medium
+  base-ref:
+    description: Git ref to review against, e.g. `origin/release`. Must exist in the checkout.
+    required: true
+  pr-number:
+    description: Pull request number to post the review on.
+    required: true
+  head-sha:
+    description: Commit SHA the review is anchored to (the checked-out PR head).
+    required: true
+  working-directory:
+    description: Path of the PR checkout, relative to the workspace.
+    default: .
+  sandbox:
+    description: Codex sandbox for commands it runs while reviewing (`read-only` recommended).
+    default: read-only
+  github-token:
+    description: Token used to post the review (needs `pull-requests: write`).
+    default: ${{ github.token }}
+  title:
+    description: Heading for the posted review.
+    default: Codex review
+  codex-version:
+    description: Pinned `@openai/codex` version.
+    default: "0.159.1"
+
+outputs:
+  review-file:
+    description: Path of Codex's final review message.
+    value: ${{ steps.review.outputs.review-file }}
+
+runs:
+  using: composite
+  steps:
+    # Installed into RUNNER_TEMP with install scripts disabled, so nothing from
+    # the pull request can influence the reviewer binary.
+    - name: Install Codex CLI
+      shell: bash
+      working-directory: ${{ runner.temp }}
+      env:
+        CODEX_VERSION: ${{ inputs.codex-version }}
+      run: |
+        npm install --prefix "$RUNNER_TEMP/codex-cli" \
+          --ignore-scripts --no-audit --no-fund \
+          --registry=https://registry.npmjs.org/ \
+          "@openai/codex@$CODEX_VERSION"
+        "$RUNNER_TEMP/codex-cli/node_modules/.bin/codex" --version
+
+    # Credentials are returned as outputs, not exported to the job, so only the
+    # review step below ever sees them.
+    - name: Assume the Bedrock role (OIDC)
+      id: aws
+      uses: aws-actions/configure-aws-credentials@v6
+      with:
+        role-to-assume: ${{ inputs.aws-role-to-assume }}
+        aws-region: ${{ inputs.aws-region }}
+        role-session-name: codex-review-${{ github.run_id }}
+        role-duration-seconds: 3600
+        output-env-credentials: false
+        output-credentials: true
+
+    - name: Run Codex review
+      id: review
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        AWS_REGION: ${{ inputs.aws-region }}
+        AWS_ACCESS_KEY_ID: ${{ steps.aws.outputs.aws-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ steps.aws.outputs.aws-secret-access-key }}
+        AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
+        CODEX_HOME: ${{ runner.temp }}/codex-home
+        MODEL: ${{ inputs.model }}
+        MODEL_PROVIDER: ${{ inputs.model-provider }}
+        REASONING_EFFORT: ${{ inputs.reasoning-effort }}
+        SANDBOX: ${{ inputs.sandbox }}
+        BASE_REF: ${{ inputs.base-ref }}
+      run: |
+        mkdir -p "$CODEX_HOME"
+        cat > "$CODEX_HOME/config.toml" <<EOF
+        model_provider = "$MODEL_PROVIDER"
+        model = "$MODEL"
+        model_reasoning_effort = "$REASONING_EFFORT"
+        sandbox_mode = "$SANDBOX"
+        approval_policy = "never"
+        EOF
+
+        review_file="$RUNNER_TEMP/codex-review.md"
+        events_file="$RUNNER_TEMP/codex-review-events.jsonl"
+        status=0
+        "$RUNNER_TEMP/codex-cli/node_modules/.bin/codex" exec review \
+          --base "$BASE_REF" --ephemeral --json -o "$review_file" \
+          < /dev/null > "$events_file" || status=$?
+
+        # Surface errors and token usage from the event stream.
+        jq -r 'select((.type == "error" or .type == "turn.failed") and ((.message // "") | startswith("Reconnecting") | not)) | "::error::Codex: \(.message // .error.message // tostring)"' "$events_file" | sort -u || true
+        usage=$(jq -c 'select(.type == "turn.completed") | .usage' "$events_file" | tail -1)
+        echo "Codex exit: $status, usage: ${usage:-none}"
+        echo "usage=${usage}" >> "$GITHUB_OUTPUT"
+        echo "review-file=$review_file" >> "$GITHUB_OUTPUT"
+
+        if [ "$status" -ne 0 ] || [ ! -s "$review_file" ]; then
+          echo "::error::Codex review failed or produced no output (exit $status)."
+          exit 1
+        fi
+
+    - name: Post review to the pull request
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REVIEW_FILE: ${{ steps.review.outputs.review-file }}
+        REVIEW_WORKSPACE: ${{ github.workspace }}/${{ inputs.working-directory }}
+        REVIEW_TITLE: ${{ inputs.title }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        MODEL: ${{ inputs.model }}
+        REASONING_EFFORT: ${{ inputs.reasoning-effort }}
+        USAGE: ${{ steps.review.outputs.usage }}
+      run: |
+        tokens=""
+        if [ -n "$USAGE" ]; then
+          tokens=$(jq -r '"\(.input_tokens) input (\(.cached_input_tokens) cached), \(.output_tokens) output tokens"' <<<"$USAGE")
+        fi
+        export REVIEW_FOOTER="<sub>\`$MODEL\` on Amazon Bedrock, $REASONING_EFFORT effort${tokens:+, $tokens}</sub>"
+        python3 "$GITHUB_ACTION_PATH/scripts/post_review.py"

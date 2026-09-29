@@ -1,0 +1,109 @@
+name: Codex PR Review
+
+# On-demand review only. Comment `@gpt review` (top-level, at the start of the
+# comment) on an open PR that targets BASE_BRANCH. Nothing runs on open/push.
+#
+# Setup (AWS admin): GitHub OIDC provider + an IAM role trusted for
+# repo:OWNER/REPO:ref:refs/heads/<default branch> that can invoke the OpenAI
+# model on Bedrock, then an Actions secret AWS_ROLE_TO_ASSUME with its ARN.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+env:
+  BASE_BRANCH: main
+
+jobs:
+  gate:
+    name: Check request
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '@gpt review')
+    runs-on: ubuntu-24.04
+    permissions:
+      # Comments on a PR are pull-request resources: reacting to or replying
+      # on them needs pull-requests: write.
+      pull-requests: write
+      issues: write
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+      head-sha: ${{ steps.check.outputs.head-sha }}
+    steps:
+      - name: Require an open PR against the base branch from a writer
+        id: check
+        uses: actions/github-script@v8
+        env:
+          BASE_BRANCH: ${{ env.BASE_BRANCH }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const base = process.env.BASE_BRANCH;
+            core.setOutput('run', 'false');
+
+            const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner, repo, username: context.actor,
+            });
+            if (!['admin', 'maintain', 'write'].includes(perm.permission)) {
+              core.notice(`${context.actor} lacks write access; ignoring.`);
+              return;
+            }
+
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: context.issue.number });
+            if (pr.state !== 'open') return;
+            if (pr.head.repo?.full_name !== `${owner}/${repo}`) {
+              core.notice('Fork PRs are not reviewed: the review job holds AWS credentials.');
+              return;
+            }
+            if (pr.base.ref !== base) {
+              try {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: pr.number,
+                  body: `Codex review only runs on PRs targeting \`${base}\` (this PR targets \`${pr.base.ref}\`).`,
+                });
+              } catch (err) {
+                core.warning(`Could not post the base-branch reply: ${err.message}`);
+              }
+              return;
+            }
+
+            core.setOutput('run', 'true');
+            core.setOutput('head-sha', pr.head.sha);
+            try {
+              await github.rest.reactions.createForIssueComment({
+                owner, repo, comment_id: context.payload.comment.id, content: 'eyes',
+              });
+            } catch (err) {
+              core.warning(`Could not add the eyes reaction: ${err.message}`);
+            }
+
+  review:
+    name: Codex review
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    concurrency:
+      group: codex-review-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: write # post the review
+      id-token: write # AWS OIDC
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.gate.outputs.head-sha }}
+          fetch-depth: 0 # the review diffs against the merge base with BASE_BRANCH
+          persist-credentials: false
+
+      - name: Codex review on Bedrock
+        uses: piyush-gambhir/codex-bedrock-review@v1
+        with:
+          aws-role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          base-ref: origin/${{ env.BASE_BRANCH }}
+          pr-number: ${{ github.event.issue.number }}
+          head-sha: ${{ needs.gate.outputs.head-sha }}
+          model: us.openai.gpt-6-sol
+          reasoning-effort: medium
