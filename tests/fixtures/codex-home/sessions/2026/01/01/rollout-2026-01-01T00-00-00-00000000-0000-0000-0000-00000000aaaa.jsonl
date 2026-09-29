@@ -1,0 +1,2 @@
+{"timestamp": "2026-09-29T23:30:49.341Z", "ordinal": 0, "type": "session_meta", "payload": {"session_id": "00000000-0000-0000-0000-00000000aaaa", "id": "00000000-0000-0000-0000-00000000aaaa", "cwd": "/home/runner/work/repo/repo", "originator": "codex_exec", "cli_version": "0.159.1", "source": "exec", "model_provider": "openai"}}
+{"timestamp": "2026-09-29T23:31:36.775Z", "ordinal": 12, "type": "event_msg", "payload": {"type": "task_complete"}}

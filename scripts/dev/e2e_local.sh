@@ -76,8 +76,9 @@ cp "$HOME/.codex/auth.json" "$CODEX_HOME/"
 CODEX_PROVIDER=openai MODEL=unused SANDBOX=read-only python3 "$root/scripts/write_config.py"
 sed -i.bak '/^model = /d' "$CODEX_HOME/config.toml" && rm -f "$CODEX_HOME/config.toml.bak"
 
+# Not --ephemeral, so the session rollout with the real token counts is kept.
 status=0
-(cd "$checkout" && "$codex" exec review --base "$BASE_REF" --ephemeral --json \
+(cd "$checkout" && "$codex" exec review --base "$BASE_REF" --json \
   -o "$run/codex-review.md" < /dev/null > "$run/codex-review-events.jsonl" 2> "$run/codex.stderr") || status=$?
 rm -f "$CODEX_HOME/auth.json"
 echo "codex exit: $status"
@@ -87,6 +88,11 @@ if [ "$status" -ne 0 ] || [ ! -s "$REVIEW_FILE" ]; then
   post python3 "$root/scripts/status.py" fail
   exit 1
 fi
+
+# Token usage and cost, the same step action.yml runs before publishing. MODEL
+# is the local ChatGPT login here, so PRICING names it to get a cost estimate.
+PRICING="${PRICING:-{\"local ChatGPT login\": [2, 0.2, 10]}}" python3 "$root/scripts/usage.py"
+export USAGE_TEXT="$(sed -n 's/^usage-text=//p' "$GITHUB_OUTPUT" | tail -1)"
 
 if [ "${DRY_RUN:-0}" = "1" ]; then
   POST_MODE=none python3 "$root/scripts/publish_review.py" || true

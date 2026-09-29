@@ -29,7 +29,7 @@ Comment `@gpt review` on a pull request. About a minute later you get a review w
 > | 🟠 | P1 | Round average unit prices to integer cents | `e2e/pricing.ts:22` | 💬 inline |
 > | 🟡 | P2 | Sort ascending to select the cheapest item | `e2e/pricing.ts:26` | 💬 inline |
 >
-> <sub>Reviewed `314c52a` against `main` · `gpt-6.1-sol` via OpenAI API · medium effort · View run</sub><br>
+> <sub>Reviewed `314c52a` against `main` · `gpt-6.1-sol` via OpenAI API · medium effort · 36,615 input (29,312 cached) + 926 output tokens · ~$0.03 · View run</sub><br>
 > <sub>Re-run: `@gpt review` · deeper: `@gpt review high` · on Bedrock: `@gpt review bedrock`</sub>
 
 - **Verdict first**: ✅ no issues, 🟡 minor issues, or 🟠/🔴 issues to address, with counts per priority.
@@ -38,6 +38,7 @@ Comment `@gpt review` on a pull request. About a minute later you get a review w
 - **Progress and failures on the PR**: a "🔍 in progress" note (with a link to the live run) is replaced by the review. If anything fails, it becomes "❌ failed" with the actual error. The requesting comment gets 👀, then 🚀 or 😕.
 - **Re-reviews stay tidy**: earlier Codex comments are collapsed as outdated.
 - **Next steps** under every review: how to re-run, go deeper, or switch provider.
+- **What it cost**: real token counts and a cost estimate on the meta line, also available as outputs.
 
 ## Quick start
 
@@ -150,6 +151,7 @@ The example workflow detects the variable, mints an app token with `actions/crea
 | `title` | `Codex review` | Review heading |
 | `github-token` | `github.token` | Needs `pull-requests: write`; use an app token for a custom bot identity |
 | **Advanced** | | |
+| `pricing` | built-in table | JSON override, per 1M tokens: `{"my-model": [input, cached-input, output]}` |
 | `sandbox` | `read-only` | Codex sandbox for commands it runs while reviewing |
 | `codex-config` | | Extra raw TOML for Codex's `config.toml` |
 | `codex-version` | `0.159.1` | Pinned Codex CLI version |
@@ -163,6 +165,10 @@ The example workflow detects the variable, mints an app token with `actions/crea
 | `filtered-count` | Findings hidden by `max-priority` |
 | `findings-file` | JSON file: `priority`, `title`, `path`, `start`, `end`, `body` per finding |
 | `review-file` | Codex's raw review message |
+| `input-tokens` | Input tokens used, cached ones included; empty when Codex reported no usage |
+| `cached-input-tokens` | Input tokens served from the prompt cache |
+| `output-tokens` | Output tokens used, reasoning tokens included |
+| `estimated-cost-usd` | Estimated cost in US dollars; empty for a model with no known price |
 
 ## Models and prices
 
@@ -172,8 +178,18 @@ The example workflow detects the variable, mints an app token with `actions/crea
 | `gpt-6-sol`, `us.openai.gpt-6-sol` | openai, bedrock | $2.00 / $0.20 / $10.00 |
 | `gpt-6-astra`, `us.openai.gpt-6-astra` | openai, bedrock | $10.00 / $1.00 / $50.00 |
 | `gpt-6-luna`, `us.openai.gpt-6-luna` | openai, bedrock | $0.10 / $0.01 / $0.50 |
+| `gpt-5.6-sol` | openai | $4.00 / $0.40 / $20.00 |
+| `gpt-5.6-terra` | openai | $2.00 / $0.20 / $12.00 |
+| `gpt-5.6-luna` | openai | $0.20 / $0.02 / $1.20 |
+| `gpt-5.5` | openai | $5.00 / $0.50 / $30.00 |
 
-Standard OpenAI API rates, which Bedrock matches. Input above 272K tokens is billed at the long-context rate. Codex's review mode doesn't currently report token usage, so check OpenAI or AWS billing for actual cost.
+Standard OpenAI API rates, which Bedrock matches; Bedrock IDs (`us.openai.gpt-6-sol`, `openai.gpt-6-sol`) are priced as the model they name.
+
+Every review shows what it used and what it cost, for example `36,615 input (29,312 cached) + 926 output tokens · ~$0.03`. Reasoning tokens are billed as output. Requests with more than 272K input tokens are priced at the long-context rate (2x input, 1.5x output). It is an estimate from the table above, not a bill: check OpenAI or AWS for what you were actually charged. A model that isn't in the table shows tokens without a cost, unless you price it with the `pricing` input:
+
+```yaml
+pricing: '{"my-fine-tune": [2, 0.2, 10]}'
+```
 
 ## How it works
 
@@ -182,7 +198,8 @@ Standard OpenAI API rates, which Bedrock matches. Input above 272K tokens is bil
 3. **Credentials**: for `bedrock`, `aws-actions/configure-aws-credentials` assumes the role via OIDC and returns credentials as step outputs. For `openai`, the key is passed as `CODEX_API_KEY`. Only the review step receives them, and no GitHub token reaches Codex.
 4. **Config**: [`scripts/write_config.py`](scripts/write_config.py) writes Codex's `config.toml`: provider, model, effort, a read-only sandbox, no approvals, your guidelines, and a minimal environment (`shell_environment_policy.inherit = "core"`) so commands Codex runs never see the credentials.
 5. **Review**: `codex exec review --base <base-ref>` reviews the diff against the merge base.
-6. **Publish**: [`scripts/publish_review.py`](scripts/publish_review.py) parses the findings and posts the review. If GitHub rejects an inline anchor, everything goes in the body instead. [`scripts/status.py`](scripts/status.py) then clears the progress note, or turns it into a failure note. A failed or empty review never looks like a pass.
+6. **Usage**: [`scripts/usage.py`](scripts/usage.py) reads the real token counts out of the session rollout Codex wrote in `CODEX_HOME` (review mode reports zero usage on its `turn.completed` event) and estimates the cost from the price table.
+7. **Publish**: [`scripts/publish_review.py`](scripts/publish_review.py) parses the findings and posts the review. If GitHub rejects an inline anchor, everything goes in the body instead. [`scripts/status.py`](scripts/status.py) then clears the progress note, or turns it into a failure note. A failed or empty review never looks like a pass.
 
 ## Security
 
@@ -203,6 +220,7 @@ The tests cover:
 - filtering, gating and rendering
 - status notes
 - config generation
+- token usage and cost, against a captured Codex session rollout
 
 ## License
 
