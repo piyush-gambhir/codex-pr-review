@@ -2,7 +2,7 @@
 
 This project follows [semantic versioning](https://semver.org). The `v1` tag always points to the latest 1.x release; breaking input or output changes get a new major version.
 
-## Unreleased
+## v1.1.0 (2026-09-30)
 
 ### Added
 
@@ -27,6 +27,8 @@ This project follows [semantic versioning](https://semver.org). The `v1` tag alw
 
 ### Fixed
 
+- GitHub API calls retry dropped connections, 5xx and 429 with backoff. Posting a review only retries when GitHub reports it did not act (429, 503), so a review is never posted twice.
+- Reviews with a single finding (headed "Review comment:") are parsed instead of shown as clean.
 - Finding explanations are dedented as a block instead of line by line, so fenced code inside them keeps its indentation.
 
 ## v1.0.0 (2026-09-30)
