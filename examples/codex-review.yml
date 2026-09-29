@@ -130,6 +130,8 @@ jobs:
       contents: read
       pull-requests: write # post the review
       id-token: write # AWS OIDC (bedrock provider)
+      # checks: write         # uncomment together with check-run below
+      # security-events: write # uncomment to upload SARIF to code scanning
     steps:
       - name: Mint GitHub App token (optional custom bot identity)
         id: app
@@ -178,6 +180,17 @@ jobs:
           review-instructions-file: ${{ hashFiles('trusted/.github/codex-review.md') != '' && 'trusted/.github/codex-review.md' || '' }}
           max-priority: P3
           # fail-on-priority: P1   # uncomment to fail the check on P0/P1 findings
+          # Optional extras, each needing the permission noted above:
+          #   check-run: true             # check run with annotations (checks: write)
+          #   sarif-file: codex-review.sarif  # then upload it with the step below
+
+      # - name: Upload the findings to code scanning
+      #   if: always() && steps.codex.outputs.sarif-file != ''
+      #   uses: github/codeql-action/upload-sarif@v4
+      #   with:
+      #     sarif_file: ${{ steps.codex.outputs.sarif-file }}
+      #     checkout_path: ${{ github.workspace }}/pr
+      #     category: codex-review
 
       - name: Report
         if: always() && steps.codex.outputs.findings-count != ''

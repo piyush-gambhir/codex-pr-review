@@ -79,6 +79,12 @@ inputs:
   rerun-hint:
     description: "Next-steps line shown under the review, e.g. how to re-run it. Empty shows nothing."
     default: ""
+  check-run:
+    description: "Create a check run named after `title` on the reviewed commit, with the verdict and one annotation per finding. Needs `checks: write`."
+    default: "false"
+  sarif-file:
+    description: "Path to also write the findings to as SARIF 2.1.0, for `github/codeql-action/upload-sarif`. Empty writes nothing."
+    default: ""
   github-token:
     description: "Token used to post (needs `pull-requests: write`). Use a GitHub App token to post under your own bot name and avatar."
     default: ${{ github.token }}
@@ -110,6 +116,12 @@ outputs:
   review-file:
     description: "Path of Codex's raw final review message."
     value: ${{ steps.review.outputs.review-file }}
+  sarif-file:
+    description: "Path of the SARIF 2.1.0 file; empty unless the sarif-file input was set."
+    value: ${{ steps.sarif.outputs.sarif-file }}
+  check-run-id:
+    description: "ID of the check run, when check-run is enabled and creating it succeeded."
+    value: ${{ steps.check.outputs.check-run-id }}
 
 runs:
   using: composite
@@ -165,6 +177,24 @@ runs:
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         RERUN_HINT: ${{ inputs.rerun-hint }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/status.py" start
+
+    # Created in progress so it shows in the PR's checks while Codex reviews,
+    # and completed after publishing. With GITHUB_TOKEN it joins this
+    # workflow's own check suite instead of getting a suite of its own.
+    - name: Start check run
+      id: check
+      if: inputs.check-run == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        BASE_REF: ${{ inputs.base-ref }}
+        REVIEW_TITLE: ${{ inputs.title }}
+        MODEL: ${{ steps.settings.outputs.model }}
+        LABEL: ${{ steps.settings.outputs.label }}
+        REASONING_EFFORT: ${{ inputs.reasoning-effort }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: python3 "$GITHUB_ACTION_PATH/scripts/checks.py" start
 
     # Installed into RUNNER_TEMP with install scripts disabled, so nothing from
     # the pull request can influence the reviewer binary.
@@ -265,6 +295,7 @@ runs:
         HIDE_PREVIOUS: ${{ inputs.hide-previous }}
         MAX_PRIORITY: ${{ inputs.max-priority }}
         FAIL_ON_PRIORITY: ${{ inputs.fail-on-priority }}
+        SUMMARY_FILE: ${{ runner.temp }}/codex-review-summary.md
       run: python3 "$GITHUB_ACTION_PATH/scripts/publish_review.py"
 
     # The review is posted even when fail-on-priority fails the step above, so
@@ -286,6 +317,55 @@ runs:
         STATUS_COMMENT_ID: ${{ steps.status.outputs.status-comment-id }}
         TRIGGER_COMMENT_ID: ${{ inputs.trigger-comment-id }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/status.py" done
+
+    # Written even when fail-on-priority failed the publish step, so the
+    # findings can still be uploaded to code scanning.
+    - name: Write SARIF
+      id: sarif
+      if: always() && inputs.sarif-file != '' && steps.publish.outputs.findings-file != ''
+      shell: bash
+      env:
+        FINDINGS_FILE: ${{ steps.publish.outputs.findings-file }}
+        SARIF_FILE: ${{ inputs.sarif-file }}
+        REVIEW_TITLE: ${{ inputs.title }}
+        CODEX_VERSION: ${{ inputs.codex-version }}
+      run: python3 "$GITHUB_ACTION_PATH/scripts/sarif.py"
+
+    - name: Complete check run
+      if: always() && !cancelled() && steps.check.outputs.check-run-id != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        BASE_REF: ${{ inputs.base-ref }}
+        REVIEW_TITLE: ${{ inputs.title }}
+        MODEL: ${{ steps.settings.outputs.model }}
+        LABEL: ${{ steps.settings.outputs.label }}
+        REASONING_EFFORT: ${{ inputs.reasoning-effort }}
+        USAGE_TEXT: ${{ steps.review.outputs.usage-text }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RERUN_HINT: ${{ inputs.rerun-hint }}
+        CHECK_RUN_ID: ${{ steps.check.outputs.check-run-id }}
+        FINDINGS_FILE: ${{ steps.publish.outputs.findings-file }}
+        SUMMARY_FILE: ${{ runner.temp }}/codex-review-summary.md
+        FAIL_ON_PRIORITY: ${{ inputs.fail-on-priority }}
+        EVENTS_FILE: ${{ runner.temp }}/codex-review-events.jsonl
+      run: python3 "$GITHUB_ACTION_PATH/scripts/checks.py" finish
+
+    - name: Cancel check run
+      if: cancelled() && steps.check.outputs.check-run-id != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        BASE_REF: ${{ inputs.base-ref }}
+        REVIEW_TITLE: ${{ inputs.title }}
+        MODEL: ${{ steps.settings.outputs.model }}
+        LABEL: ${{ steps.settings.outputs.label }}
+        REASONING_EFFORT: ${{ inputs.reasoning-effort }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        CHECK_RUN_ID: ${{ steps.check.outputs.check-run-id }}
+      run: python3 "$GITHUB_ACTION_PATH/scripts/checks.py" cancel
 
     - name: Report failure on the PR
       if: failure() && steps.publish.outputs.posted != 'true' && inputs.post-mode != 'none'

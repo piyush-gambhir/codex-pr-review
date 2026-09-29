@@ -83,6 +83,49 @@ You can also pass rules inline with `review-instructions`.
 
 Every run also writes the review to the workflow's job summary.
 
+### Checks and code scanning
+
+Two optional outputs put the findings where GitHub already shows problems: a check run (annotations on the diff, a conclusion the branch protection rules can require) and a SARIF file (code scanning alerts, with history and dismissals).
+
+```yaml
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write # check-run: true
+      security-events: write # upload-sarif
+    steps:
+      # ...checkout steps...
+      - id: codex
+        uses: piyush-gambhir/codex-pr-review@v1
+        with:
+          # ...the usual inputs...
+          check-run: true
+          sarif-file: codex-review.sarif
+
+      - name: Upload to code scanning
+        if: always() && steps.codex.outputs.sarif-file != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.codex.outputs.sarif-file }}
+          checkout_path: ${{ github.workspace }}/pr # where the PR is checked out
+          category: codex-review
+```
+
+**`check-run: true`** creates a check run named after `title` on the reviewed commit. It appears as "in progress" while Codex reviews, then completes with:
+
+| Conclusion | When |
+|---|---|
+| `success` | no findings |
+| `neutral` | findings, but none at or above `fail-on-priority` (or gating is off) |
+| `failure` | `fail-on-priority` tripped, or the review itself failed |
+| `cancelled` | the job was cancelled |
+
+The output holds the verdict and the issues table, plus one annotation per finding: `failure` for P0 and P1, `warning` for P2, `notice` for P3. Annotations go up 50 at a time, as the API requires.
+
+Needs `checks: write`. Without it the API answers 403, the action warns and the review is posted as usual. Note that check runs created with `GITHUB_TOKEN` (or with the action's own app token) attach to the workflow's **own check suite**, so the run is listed next to the review job rather than under a suite of its own; that is a GitHub restriction, not a setting.
+
+**`sarif-file`** writes the findings as SARIF 2.1.0, with one rule per priority (`codex-review/p0` to `codex-review/p3`), a level per priority (`error`, `error`, `warning`, `note`) and fingerprints over path and title, so a re-review updates alerts instead of duplicating them. The file is written even when `fail-on-priority` fails the step, so the upload step needs `if: always()`. Findings paths are relative to `working-directory`, so pass that directory as `checkout_path` when the PR is not checked out at the workspace root. Code scanning keeps alerts for files in the analysed commit only.
+
 ### Your own bot name and avatar
 
 By default reviews are posted by `github-actions`. To post under your own name and icon, use a GitHub App:
@@ -148,6 +191,8 @@ The example workflow detects the variable, mints an app token with `actions/crea
 | `trigger-comment-id` | | Requesting comment; gets 🚀 on success and 😕 on failure |
 | `rerun-hint` | | Next-steps line under the review |
 | `title` | `Codex review` | Review heading |
+| `check-run` | `false` | Create a check run with the verdict and one annotation per finding; needs `checks: write` |
+| `sarif-file` | | Also write the findings as SARIF 2.1.0 to this path, for code scanning |
 | `github-token` | `github.token` | Needs `pull-requests: write`; use an app token for a custom bot identity |
 | **Advanced** | | |
 | `sandbox` | `read-only` | Codex sandbox for commands it runs while reviewing |
@@ -163,6 +208,8 @@ The example workflow detects the variable, mints an app token with `actions/crea
 | `filtered-count` | Findings hidden by `max-priority` |
 | `findings-file` | JSON file: `priority`, `title`, `path`, `start`, `end`, `body` per finding |
 | `review-file` | Codex's raw review message |
+| `sarif-file` | The SARIF file, when `sarif-file` was set |
+| `check-run-id` | The check run, when `check-run` is enabled |
 
 ## Models and prices
 
@@ -183,6 +230,7 @@ Standard OpenAI API rates, which Bedrock matches. Input above 272K tokens is bil
 4. **Config**: [`scripts/write_config.py`](scripts/write_config.py) writes Codex's `config.toml`: provider, model, effort, a read-only sandbox, no approvals, your guidelines, and a minimal environment (`shell_environment_policy.inherit = "core"`) so commands Codex runs never see the credentials.
 5. **Review**: `codex exec review --base <base-ref>` reviews the diff against the merge base.
 6. **Publish**: [`scripts/publish_review.py`](scripts/publish_review.py) parses the findings and posts the review. If GitHub rejects an inline anchor, everything goes in the body instead. [`scripts/status.py`](scripts/status.py) then clears the progress note, or turns it into a failure note. A failed or empty review never looks like a pass.
+7. **Checks and SARIF** (optional): [`scripts/checks.py`](scripts/checks.py) completes the check run with the verdict and the annotations, and [`scripts/sarif.py`](scripts/sarif.py) turns the findings JSON into a SARIF 2.1.0 file. Neither can fail the review.
 
 ## Security
 
@@ -203,6 +251,8 @@ The tests cover:
 - filtering, gating and rendering
 - status notes
 - config generation
+- check run conclusions, annotation batching and summary truncation
+- SARIF 2.1.0 structure
 
 ## License
 
