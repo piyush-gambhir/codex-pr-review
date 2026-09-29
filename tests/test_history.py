@@ -301,6 +301,10 @@ class PublishIntegrationTest(unittest.TestCase):
         self.assertIn("(still open)", summary)
         self.assertNotIn(history.STATE_PREFIX, summary)
 
+    def test_incremental_base_commit_is_shortened_in_the_meta_line(self):
+        _, _, summary = self.run_main("No issues found.", BASE_REF=OLD_SHA)
+        self.assertIn(f"against `{OLD_SHA[:7]}`", summary)
+
     def test_incremental_note_and_carried_findings(self):
         plan = self.plan("Convert the percentage", "Handle zero units")
         plan["previous"]["findings"][1]["path"] = "src/coupons.ts"

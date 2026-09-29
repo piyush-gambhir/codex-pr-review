@@ -170,6 +170,8 @@ class Context:
         self.base = env.get("BASE_REF", "").strip()
         if self.base.startswith("origin/"):
             self.base = self.base[len("origin/"):]
+        if re.fullmatch(r"[0-9a-f]{40}", self.base):
+            self.base = self.base[:7]  # an incremental run reviews against a commit
         self.model = env.get("MODEL", "").strip()
         self.label = env.get("LABEL", "").strip()
         self.effort = env.get("REASONING_EFFORT", "").strip()
