@@ -1,25 +1,31 @@
-name: Codex review on Amazon Bedrock
+name: Codex PR review (OpenAI or Amazon Bedrock)
 description: >-
-  Run Codex's native code review (`codex exec review`) on OpenAI models served
-  by Amazon Bedrock, authenticated with GitHub OIDC, and post the findings as a
-  pull request review with inline comments.
+  Run Codex's native code review (`codex exec review`) on OpenAI models, either
+  through the OpenAI API or through Amazon Bedrock with GitHub OIDC, and post
+  the findings as a pull request review with inline comments.
 
 inputs:
-  aws-role-to-assume:
-    description: "IAM role ARN trusted for this repository's GitHub OIDC tokens, allowed to invoke the model."
-    required: true
-  aws-region:
-    description: "AWS region for Bedrock."
-    default: us-east-1
+  provider:
+    description: "Where the model runs: `openai` (OpenAI API key) or `bedrock` (Amazon Bedrock via GitHub OIDC)."
+    default: bedrock
   model:
-    description: "Bedrock model or inference profile ID."
-    default: us.openai.gpt-6-sol
-  model-provider:
-    description: "Codex model provider. `amazon-bedrock-runtime` (inference profiles) or `amazon-bedrock` (Mantle, in-region model IDs)."
-    default: amazon-bedrock-runtime
+    description: "Model ID. Empty picks the provider default: `gpt-6.1-sol` for openai, `us.openai.gpt-6-sol` for bedrock."
+    default: ""
   reasoning-effort:
     description: "Codex reasoning effort (low, medium, high, xhigh)."
     default: medium
+  openai-api-key:
+    description: "OpenAI API key. Required when provider is `openai`."
+    default: ""
+  aws-role-to-assume:
+    description: "IAM role ARN trusted for this repository's GitHub OIDC tokens. Required when provider is `bedrock`."
+    default: ""
+  aws-region:
+    description: "AWS region for Bedrock."
+    default: us-east-1
+  bedrock-endpoint:
+    description: "Codex's Bedrock provider: `amazon-bedrock-runtime` (inference profiles such as `us.openai.gpt-6-sol`) or `amazon-bedrock` (Mantle, in-region IDs such as `openai.gpt-6-sol`)."
+    default: amazon-bedrock-runtime
   base-ref:
     description: "Git ref to review against, e.g. `origin/release`. Must exist in the checkout."
     required: true
@@ -53,6 +59,41 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Resolve provider settings
+      id: settings
+      shell: bash
+      env:
+        PROVIDER: ${{ inputs.provider }}
+        MODEL: ${{ inputs.model }}
+        BEDROCK_ENDPOINT: ${{ inputs.bedrock-endpoint }}
+        HAS_OPENAI_KEY: ${{ inputs.openai-api-key != '' }}
+        HAS_AWS_ROLE: ${{ inputs.aws-role-to-assume != '' }}
+      run: |
+        case "$PROVIDER" in
+          openai)
+            [ "$HAS_OPENAI_KEY" = "true" ] || { echo "::error::provider openai needs the openai-api-key input."; exit 1; }
+            codex_provider="openai"
+            model="${MODEL:-gpt-6.1-sol}"
+            label="OpenAI API"
+            ;;
+          bedrock)
+            [ "$HAS_AWS_ROLE" = "true" ] || { echo "::error::provider bedrock needs the aws-role-to-assume input."; exit 1; }
+            codex_provider="$BEDROCK_ENDPOINT"
+            model="${MODEL:-us.openai.gpt-6-sol}"
+            label="Amazon Bedrock"
+            ;;
+          *)
+            echo "::error::Unknown provider '$PROVIDER' (use openai or bedrock)."
+            exit 1
+            ;;
+        esac
+        echo "Provider: $PROVIDER ($codex_provider), model: $model"
+        {
+          echo "codex-provider=$codex_provider"
+          echo "model=$model"
+          echo "label=$label"
+        } >> "$GITHUB_OUTPUT"
+
     # Installed into RUNNER_TEMP with install scripts disabled, so nothing from
     # the pull request can influence the reviewer binary.
     - name: Install Codex CLI
@@ -71,6 +112,7 @@ runs:
     # review step below ever sees them.
     - name: Assume the Bedrock role (OIDC)
       id: aws
+      if: inputs.provider == 'bedrock'
       uses: aws-actions/configure-aws-credentials@v6
       with:
         role-to-assume: ${{ inputs.aws-role-to-assume }}
@@ -85,27 +127,29 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
+        # Only the selected provider's credentials are set; the others are empty.
+        CODEX_API_KEY: ${{ inputs.provider == 'openai' && inputs.openai-api-key || '' }}
         AWS_REGION: ${{ inputs.aws-region }}
         AWS_ACCESS_KEY_ID: ${{ steps.aws.outputs.aws-access-key-id }}
         AWS_SECRET_ACCESS_KEY: ${{ steps.aws.outputs.aws-secret-access-key }}
         AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
         CODEX_HOME: ${{ runner.temp }}/codex-home
-        MODEL: ${{ inputs.model }}
-        MODEL_PROVIDER: ${{ inputs.model-provider }}
+        MODEL: ${{ steps.settings.outputs.model }}
+        CODEX_PROVIDER: ${{ steps.settings.outputs.codex-provider }}
         REASONING_EFFORT: ${{ inputs.reasoning-effort }}
         SANDBOX: ${{ inputs.sandbox }}
         BASE_REF: ${{ inputs.base-ref }}
       run: |
         mkdir -p "$CODEX_HOME"
         cat > "$CODEX_HOME/config.toml" <<EOF
-        model_provider = "$MODEL_PROVIDER"
+        model_provider = "$CODEX_PROVIDER"
         model = "$MODEL"
         model_reasoning_effort = "$REASONING_EFFORT"
         sandbox_mode = "$SANDBOX"
         approval_policy = "never"
 
         # Commands Codex runs while reviewing get only a minimal environment,
-        # never the AWS credentials this step holds.
+        # never the API key or AWS credentials this step holds.
         [shell_environment_policy]
         inherit = "core"
         EOF
@@ -138,7 +182,8 @@ runs:
         REVIEW_TITLE: ${{ inputs.title }}
         PR_NUMBER: ${{ inputs.pr-number }}
         HEAD_SHA: ${{ inputs.head-sha }}
-        MODEL: ${{ inputs.model }}
+        MODEL: ${{ steps.settings.outputs.model }}
+        LABEL: ${{ steps.settings.outputs.label }}
         REASONING_EFFORT: ${{ inputs.reasoning-effort }}
         USAGE: ${{ steps.review.outputs.usage }}
       run: |
@@ -146,5 +191,5 @@ runs:
         if [ -n "$USAGE" ]; then
           tokens=$(jq -r '"\(.input_tokens) input (\(.cached_input_tokens) cached), \(.output_tokens) output tokens"' <<<"$USAGE")
         fi
-        export REVIEW_FOOTER="<sub>\`$MODEL\` on Amazon Bedrock, $REASONING_EFFORT effort${tokens:+, $tokens}</sub>"
+        export REVIEW_FOOTER="<sub>\`$MODEL\` via $LABEL, $REASONING_EFFORT effort${tokens:+, $tokens}</sub>"
         python3 "$GITHUB_ACTION_PATH/scripts/post_review.py"

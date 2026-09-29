@@ -3,9 +3,13 @@ name: Codex PR Review
 # On-demand review only. Comment `@gpt review` (top-level, at the start of the
 # comment) on an open PR that targets BASE_BRANCH. Nothing runs on open/push.
 #
-# Setup (AWS admin): GitHub OIDC provider + an IAM role trusted for
-# repo:OWNER/REPO:ref:refs/heads/<default branch> that can invoke the OpenAI
-# model on Bedrock, then an Actions secret AWS_ROLE_TO_ASSUME with its ARN.
+# Provider: `@gpt review openai` or `@gpt review bedrock` picks one for that
+# request; otherwise the repository variable CODEX_REVIEW_PROVIDER decides
+# (default: openai).
+#   openai:  Actions secret OPENAI_API_KEY.
+#   bedrock: GitHub OIDC provider + IAM role trusted for
+#            repo:OWNER/REPO:ref:refs/heads/<default branch> that can invoke
+#            the OpenAI model on Bedrock; Actions secret AWS_ROLE_TO_ASSUME.
 
 on:
   issue_comment:
@@ -29,17 +33,27 @@ jobs:
     outputs:
       run: ${{ steps.check.outputs.run }}
       head-sha: ${{ steps.check.outputs.head-sha }}
+      provider: ${{ steps.check.outputs.provider }}
     steps:
       - name: Require an open PR against the base branch from a writer
         id: check
         uses: actions/github-script@v8
         env:
           BASE_BRANCH: ${{ env.BASE_BRANCH }}
+          DEFAULT_PROVIDER: ${{ vars.CODEX_REVIEW_PROVIDER || 'openai' }}
         with:
           script: |
             const { owner, repo } = context.repo;
             const base = process.env.BASE_BRANCH;
             core.setOutput('run', 'false');
+
+            // `@gpt review [openai|bedrock]`: an explicit word wins over the default.
+            const requested = context.payload.comment.body.split('\n')[0].trim().split(/\s+/)[2]?.toLowerCase();
+            const provider = requested || process.env.DEFAULT_PROVIDER;
+            if (!['openai', 'bedrock'].includes(provider)) {
+              core.notice(`Unknown provider '${provider}'; use openai or bedrock.`);
+              return;
+            }
 
             const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({
               owner, repo, username: context.actor,
@@ -69,6 +83,7 @@ jobs:
 
             core.setOutput('run', 'true');
             core.setOutput('head-sha', pr.head.sha);
+            core.setOutput('provider', provider);
             try {
               await github.rest.reactions.createForIssueComment({
                 owner, repo, comment_id: context.payload.comment.id, content: 'eyes',
@@ -98,12 +113,13 @@ jobs:
           fetch-depth: 0 # the review diffs against the merge base with BASE_BRANCH
           persist-credentials: false
 
-      - name: Codex review on Bedrock
+      - name: Codex review (${{ needs.gate.outputs.provider }})
         uses: piyush-gambhir/codex-bedrock-review@v1
         with:
-          aws-role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          provider: ${{ needs.gate.outputs.provider }}
+          openai-api-key: ${{ needs.gate.outputs.provider == 'openai' && secrets.OPENAI_API_KEY || '' }}
+          aws-role-to-assume: ${{ needs.gate.outputs.provider == 'bedrock' && secrets.AWS_ROLE_TO_ASSUME || '' }}
+          reasoning-effort: medium
           base-ref: origin/${{ env.BASE_BRANCH }}
           pr-number: ${{ github.event.issue.number }}
           head-sha: ${{ needs.gate.outputs.head-sha }}
-          model: us.openai.gpt-6-sol
-          reasoning-effort: medium
