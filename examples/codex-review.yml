@@ -1,15 +1,25 @@
 name: Codex PR Review
 
-# On-demand review only. Comment `@gpt review` (top-level, at the start of the
-# comment) on an open PR that targets BASE_BRANCH. Nothing runs on open/push.
+# On-demand review. Comment on an open PR that targets BASE_BRANCH:
 #
-# Provider: `@gpt review openai` or `@gpt review bedrock` picks one for that
-# request; otherwise the repository variable CODEX_REVIEW_PROVIDER decides
-# (default: openai).
+#   @gpt review                  default provider and effort
+#   @gpt review high             more reasoning for this request
+#   @gpt review bedrock          run on Amazon Bedrock this time
+#   @gpt review openai xhigh     provider and effort together
+#
+# The command must start the comment. Nothing runs on open or push.
+# Defaults come from repository variables CODEX_REVIEW_PROVIDER (openai) and
+# CODEX_REVIEW_EFFORT (medium).
+#
+# Optional: post as your own bot (name and avatar) instead of github-actions,
+# using a GitHub App (see README). Set repository variable CODEX_REVIEW_APP_ID
+# and secret CODEX_REVIEW_APP_PRIVATE_KEY; without them GITHUB_TOKEN is used.
+#
+# Credentials:
 #   openai:  Actions secret OPENAI_API_KEY.
-#   bedrock: GitHub OIDC provider + IAM role trusted for
-#            repo:OWNER/REPO:ref:refs/heads/<default branch> that can invoke
-#            the OpenAI model on Bedrock; Actions secret AWS_ROLE_TO_ASSUME.
+#   bedrock: an IAM role trusted for repo:OWNER/REPO:ref:refs/heads/<default
+#            branch> via GitHub OIDC that can invoke the model; Actions secret
+#            AWS_ROLE_TO_ASSUME with its ARN.
 
 on:
   issue_comment:
@@ -34,24 +44,36 @@ jobs:
       run: ${{ steps.check.outputs.run }}
       head-sha: ${{ steps.check.outputs.head-sha }}
       provider: ${{ steps.check.outputs.provider }}
+      effort: ${{ steps.check.outputs.effort }}
     steps:
-      - name: Require an open PR against the base branch from a writer
+      - name: Parse the request and check the PR
         id: check
         uses: actions/github-script@v8
         env:
           BASE_BRANCH: ${{ env.BASE_BRANCH }}
           DEFAULT_PROVIDER: ${{ vars.CODEX_REVIEW_PROVIDER || 'openai' }}
+          DEFAULT_EFFORT: ${{ vars.CODEX_REVIEW_EFFORT || 'medium' }}
         with:
           script: |
             const { owner, repo } = context.repo;
             const base = process.env.BASE_BRANCH;
             core.setOutput('run', 'false');
 
-            // `@gpt review [openai|bedrock]`: an explicit word wins over the default.
-            const requested = context.payload.comment.body.split('\n')[0].trim().split(/\s+/)[2]?.toLowerCase();
-            const provider = requested || process.env.DEFAULT_PROVIDER;
-            if (!['openai', 'bedrock'].includes(provider)) {
-              core.notice(`Unknown provider '${provider}'; use openai or bedrock.`);
+            // Words after "@gpt review" on the first line choose provider and effort.
+            const providers = ['openai', 'bedrock'];
+            const efforts = ['low', 'medium', 'high', 'xhigh'];
+            let provider = process.env.DEFAULT_PROVIDER;
+            let effort = process.env.DEFAULT_EFFORT;
+            const words = context.payload.comment.body.split('\n')[0].trim().split(/\s+/).slice(2);
+            for (const word of words.map((w) => w.toLowerCase())) {
+              if (providers.includes(word)) provider = word;
+              else if (efforts.includes(word)) effort = word;
+              else {
+                core.notice(`Ignoring unknown option '${word}'.`);
+              }
+            }
+            if (!providers.includes(provider) || !efforts.includes(effort)) {
+              core.notice(`Invalid defaults: provider '${provider}', effort '${effort}'.`);
               return;
             }
 
@@ -66,7 +88,7 @@ jobs:
             const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: context.issue.number });
             if (pr.state !== 'open') return;
             if (pr.head.repo?.full_name !== `${owner}/${repo}`) {
-              core.notice('Fork PRs are not reviewed: the review job holds AWS credentials.');
+              core.notice('Fork PRs are not reviewed: the review job holds model credentials.');
               return;
             }
             if (pr.base.ref !== base) {
@@ -84,6 +106,9 @@ jobs:
             core.setOutput('run', 'true');
             core.setOutput('head-sha', pr.head.sha);
             core.setOutput('provider', provider);
+            core.setOutput('effort', effort);
+
+            // Acknowledge the request; best effort only.
             try {
               await github.rest.reactions.createForIssueComment({
                 owner, repo, comment_id: context.payload.comment.id, content: 'eyes',
@@ -104,22 +129,59 @@ jobs:
     permissions:
       contents: read
       pull-requests: write # post the review
-      id-token: write # AWS OIDC
+      id-token: write # AWS OIDC (bedrock provider)
     steps:
+      - name: Mint GitHub App token (optional custom bot identity)
+        id: app
+        if: vars.CODEX_REVIEW_APP_ID != ''
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.CODEX_REVIEW_APP_ID }}
+          private-key: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-issues: write
+
+      # Review guidelines come from the default branch, so a PR can't rewrite
+      # the rules it is reviewed against.
+      - name: Checkout review guidelines from the default branch
+        uses: actions/checkout@v6
+        with:
+          path: trusted
+          sparse-checkout: .github/codex-review.md
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Checkout PR head
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.gate.outputs.head-sha }}
+          path: pr
           fetch-depth: 0 # the review diffs against the merge base with BASE_BRANCH
           persist-credentials: false
 
-      - name: Codex review (${{ needs.gate.outputs.provider }})
-        uses: piyush-gambhir/codex-bedrock-review@v1
+      - name: Codex review (${{ needs.gate.outputs.provider }}, ${{ needs.gate.outputs.effort }})
+        id: codex
+        uses: piyush-gambhir/codex-pr-review@v1
         with:
           provider: ${{ needs.gate.outputs.provider }}
+          reasoning-effort: ${{ needs.gate.outputs.effort }}
           openai-api-key: ${{ needs.gate.outputs.provider == 'openai' && secrets.OPENAI_API_KEY || '' }}
           aws-role-to-assume: ${{ needs.gate.outputs.provider == 'bedrock' && secrets.AWS_ROLE_TO_ASSUME || '' }}
-          reasoning-effort: medium
           base-ref: origin/${{ env.BASE_BRANCH }}
+          working-directory: pr
           pr-number: ${{ github.event.issue.number }}
           head-sha: ${{ needs.gate.outputs.head-sha }}
+          github-token: ${{ steps.app.outputs.token || github.token }}
+          trigger-comment-id: ${{ github.event.comment.id }}
+          rerun-hint: "Re-run: `@gpt review` \u00b7 deeper: `@gpt review high` \u00b7 on Bedrock: `@gpt review bedrock`"
+          # Optional: repository-specific guidelines (file may not exist).
+          review-instructions-file: ${{ hashFiles('trusted/.github/codex-review.md') != '' && 'trusted/.github/codex-review.md' || '' }}
+          max-priority: P3
+          # fail-on-priority: P1   # uncomment to fail the check on P0/P1 findings
+
+      - name: Report
+        if: always() && steps.codex.outputs.findings-count != ''
+        env:
+          COUNT: ${{ steps.codex.outputs.findings-count }}
+          HIGHEST: ${{ steps.codex.outputs.highest-priority }}
+        run: echo "Codex reported $COUNT finding(s), highest ${HIGHEST:-none}."
