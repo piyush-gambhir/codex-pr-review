@@ -81,7 +81,7 @@ def main(action: str) -> int:
         reason = failure_reason(env.get("EVENTS_FILE", ""))
         detail = f"\n\n```\n{reason}\n```" if reason else ""
         body = (
-            f"{STATUS_MARKER}\n❌ **{ctx.title} failed**{detail}\n\n"
+            f"{STATUS_MARKER}\n\u274c **{ctx.title} failed**{detail}\n\n"
             f"<sub>{ctx.meta('Reviewing')}</sub>" + (f"\n<sub>{ctx.rerun_hint}</sub>" if ctx.rerun_hint else "")
         )
         if status_id:

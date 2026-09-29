@@ -33,6 +33,13 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(findings[2]["path"], "src/pricing.ts")
         self.assertEqual((findings[2]["start"], findings[2]["end"]), (11, 12))
 
+    def test_single_finding_heading(self):
+        # With one finding Codex writes "Review comment:" instead of "Full review comments:".
+        text = f"One issue.\n\nReview comment:\n\n- [P2] Guard empty input \u2014 {WORKSPACE}/a.py:4\n  Explain.\n"
+        summary, findings = pr.parse_review(text, WORKSPACE)
+        self.assertEqual(summary, "One issue.")
+        self.assertEqual([(f["priority"], f["path"], f["start"]) for f in findings], [(2, "a.py", 4)])
+
     def test_no_findings(self):
         summary, findings = pr.parse_review("No issues found in the changes.", WORKSPACE)
         self.assertEqual((summary, findings), ("No issues found in the changes.", []))

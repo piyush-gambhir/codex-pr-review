@@ -44,6 +44,7 @@ FINDING_RE = re.compile(
     r"^-\s+(?P<pre>.*?)\[P(?P<priority>\d)\]\s+(?P<title>.+?)\s+\u2014\s+"
     r"(?P<path>\S+?):(?P<start>\d+)(?:-(?P<end>\d+))?\s*$"
 )
+FINDINGS_HEADING_RE = re.compile(r"^(?:Full )?review comments?:[ \t]*$", re.IGNORECASE | re.MULTILINE)
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
 
 
@@ -65,7 +66,9 @@ def dedent_body(lines: list[str]) -> str:
 
 def parse_review(text: str, workspace: str) -> tuple[str, list[dict]]:
     """Split Codex's review message into (summary, findings)."""
-    summary, _, rest = text.partition("Full review comments:")
+    # "Full review comments:" normally; "Review comment:" when there is only one.
+    heading = FINDINGS_HEADING_RE.search(text)
+    summary, rest = (text[: heading.start()], text[heading.end():]) if heading else (text, "")
     findings: list[dict] = []
     current: dict | None = None
     prefix = workspace.rstrip("/") + "/" if workspace else None
