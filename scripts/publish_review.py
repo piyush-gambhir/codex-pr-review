@@ -245,15 +245,17 @@ def details(finding: dict, ctx: Context) -> str:
     return f"<details>\n<summary>{summary}</summary>\n\n{location(finding, ctx)}\n\n{finding['body']}\n\n</details>"
 
 
-def issues_table(findings: list[dict], ctx: Context, inline_ids: set[int]) -> str:
-    rows = ["| | Priority | Issue | Location | |", "|---|---|---|---|---|"]
+def issues_table(findings: list[dict], ctx: Context, inline_ids: set[int] | None = None) -> str:
+    """One row per finding; inline_ids None drops the "where" column (check runs)."""
+    tail = " |" if inline_ids is not None else ""
+    rows = [f"| | Priority | Issue | Location |{tail}", "|---|---|---|---|" + ("---|" if tail else "")]
     for finding in findings:
         title = finding["title"].replace("|", "\\|")
-        where = "\U0001f4ac inline" if id(finding) in inline_ids else "\u2b07\ufe0f below"
+        where = "\U0001f4ac inline" if id(finding) in (inline_ids or set()) else "\u2b07\ufe0f below"
         icon = PRIORITY_ICON.get(finding["priority"], "\u26aa")
         rows.append(
             f"| {icon} | P{finding['priority']} | {title} "
-            f"| {location(finding, ctx)} | {where} |"
+            f"| {location(finding, ctx)} |" + (f" {where} |" if tail else "")
         )
     return "\n".join(rows)
 
@@ -292,6 +294,13 @@ def write_outputs(findings: list[dict], filtered_out: int) -> None:
         set_output(key, value)
 
 
+def write_summary_file(summary: str) -> None:
+    """Keep Codex's prose summary for later steps, such as the check run output."""
+    path = os.environ.get("SUMMARY_FILE", "").strip()
+    if path:
+        pathlib.Path(path).write_text(summary, encoding="utf-8")
+
+
 def write_summary(summary: str, findings: list[dict], ctx: Context) -> None:
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     if path:
@@ -328,6 +337,7 @@ def main() -> int:
         ctx.note = f"{plural(filtered_out, 'lower-priority finding')} below P{max_priority} not shown."
 
     write_outputs(findings, filtered_out)
+    write_summary_file(summary)
     write_summary(summary, findings, ctx)
 
     if mode != "none":

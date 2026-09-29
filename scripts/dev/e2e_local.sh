@@ -11,6 +11,10 @@
 # Any environment variable the scripts read (MAX_PRIORITY, POST_MODE,
 # REVIEW_INSTRUCTIONS, FAIL_ON_PRIORITY, HIDE_PREVIOUS, ...) can be set to
 # override the defaults below. DRY_RUN=1 skips everything that posts.
+#
+# CHECK_RUN=1 also runs the check-run steps; a personal token cannot create
+# check runs, so that only exercises the 403 warning. SARIF is always written
+# to the run directory (SARIF_FILE overrides the path), dry runs included.
 set -euo pipefail
 
 repo="${1:?usage: e2e_local.sh <owner/repo> <pr-number>}"
@@ -60,13 +64,21 @@ export RERUN_HINT="${RERUN_HINT:-local e2e run}"
 export RUNNER_TEMP="$run" GITHUB_OUTPUT="$run/output" GITHUB_STEP_SUMMARY="$run/summary.md"
 export GITHUB_WORKSPACE="$checkout" REVIEW_WORKSPACE="$checkout"
 export POST_MODE="${POST_MODE:-review}" HIDE_PREVIOUS="${HIDE_PREVIOUS:-true}"
+export SUMMARY_FILE="$run/codex-review-summary.md"
+export SARIF_FILE="${SARIF_FILE:-$run/codex-review.sarif}" CODEX_VERSION="$codex_version"
 : > "$GITHUB_OUTPUT"
 echo "run dir: $run"
 
 post() { [ "${DRY_RUN:-0}" = "1" ] || "$@"; }
+output() { sed -n "s/^$1=//p" "$GITHUB_OUTPUT" | tail -1; }
 
 post python3 "$root/scripts/status.py" start
-export STATUS_COMMENT_ID="$(sed -n 's/^status-comment-id=//p' "$GITHUB_OUTPUT" | tail -1)"
+export STATUS_COMMENT_ID="$(output status-comment-id)"
+
+if [ "${CHECK_RUN:-0}" = "1" ]; then
+  post python3 "$root/scripts/checks.py" start
+  export CHECK_RUN_ID="$(output check-run-id)"
+fi
 
 # Codex home with the local login; config comes from write_config.py. The
 # ChatGPT login picks its own model, so the model line is dropped.
@@ -76,8 +88,8 @@ cp "$HOME/.codex/auth.json" "$CODEX_HOME/"
 CODEX_PROVIDER=openai MODEL=unused SANDBOX=read-only python3 "$root/scripts/write_config.py"
 sed -i.bak '/^model = /d' "$CODEX_HOME/config.toml" && rm -f "$CODEX_HOME/config.toml.bak"
 
-# Not --ephemeral, so the session rollout with the real token counts is kept.
 status=0
+# Not --ephemeral, so the session rollout with the real token counts is kept.
 (cd "$checkout" && "$codex" exec review --base "$BASE_REF" --json \
   -o "$run/codex-review.md" < /dev/null > "$run/codex-review-events.jsonl" 2> "$run/codex.stderr") || status=$?
 rm -f "$CODEX_HOME/auth.json"
@@ -86,16 +98,27 @@ export REVIEW_FILE="$run/codex-review.md" EVENTS_FILE="$run/codex-review-events.
 
 if [ "$status" -ne 0 ] || [ ! -s "$REVIEW_FILE" ]; then
   post python3 "$root/scripts/status.py" fail
+  # No findings file, so the check run reports the failure.
+  [ "${CHECK_RUN:-0}" = "1" ] && post python3 "$root/scripts/checks.py" finish
   exit 1
 fi
 
 # Token usage and cost, the same step action.yml runs before publishing. MODEL
 # is the local ChatGPT login here, so PRICING names it to get a cost estimate.
 PRICING="${PRICING:-{\"local ChatGPT login\": [2, 0.2, 10]}}" python3 "$root/scripts/usage.py"
-export USAGE_TEXT="$(sed -n 's/^usage-text=//p' "$GITHUB_OUTPUT" | tail -1)"
+export USAGE_TEXT="$(output usage-text)"
+
+# SARIF is a local file, so it is written in dry runs too.
+extras() {
+  FINDINGS_FILE="$(output findings-file)" python3 "$root/scripts/sarif.py"
+  if [ "${CHECK_RUN:-0}" = "1" ]; then
+    FINDINGS_FILE="$(output findings-file)" post python3 "$root/scripts/checks.py" finish
+  fi
+}
 
 if [ "${DRY_RUN:-0}" = "1" ]; then
   POST_MODE=none python3 "$root/scripts/publish_review.py" || true
+  extras
   echo "--- summary"; cat "$GITHUB_STEP_SUMMARY"
   exit 0
 fi
@@ -107,5 +130,6 @@ if grep -q '^posted=true' "$GITHUB_OUTPUT"; then
 else
   python3 "$root/scripts/status.py" fail
 fi
+extras
 echo "--- outputs"; cat "$GITHUB_OUTPUT"
 exit "$publish"
