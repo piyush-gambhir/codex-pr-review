@@ -274,3 +274,60 @@ class MainTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RetryTest(unittest.TestCase):
+    """The GitHub helper retries transient failures, but never repeats a POST that may have landed."""
+
+    def call(self, method, failures, url=None):
+        import http.client
+        import urllib.error
+        attempts = []
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"ok": true}'
+
+        def urlopen(request, timeout=None):
+            attempts.append(request.get_method())
+            if len(attempts) <= len(failures):
+                failure = failures[len(attempts) - 1]
+                if isinstance(failure, int):
+                    raise urllib.error.HTTPError(request.full_url, failure, "x", {}, None)
+                raise failure
+            return Response()
+
+        with mock.patch.object(pr.urllib.request, "urlopen", side_effect=urlopen), \
+                mock.patch.object(pr.time, "sleep"):
+            result = pr.github(method, "/x", "t", {"a": 1} if method != "GET" else None, url=url)
+        return result, len(attempts)
+
+    def test_get_retries_disconnects_and_5xx(self):
+        import http.client
+        result, attempts = self.call("GET", [http.client.RemoteDisconnected("gone"), 502])
+        self.assertEqual((result, attempts), ({"ok": True}, 3))
+
+    def test_post_retries_only_unprocessed_statuses(self):
+        import http.client
+        self.assertEqual(self.call("POST", [503])[1], 2)
+        with self.assertRaises(http.client.RemoteDisconnected):
+            self.call("POST", [http.client.RemoteDisconnected("gone")])
+        import urllib.error
+        with self.assertRaises(urllib.error.HTTPError):
+            self.call("POST", [502])
+
+    def test_graphql_post_is_treated_as_idempotent(self):
+        import http.client
+        _, attempts = self.call("POST", [http.client.RemoteDisconnected("gone")], url="https://api.github.com/graphql")
+        self.assertEqual(attempts, 2)
+
+    def test_gives_up_after_the_last_delay(self):
+        import urllib.error
+        with self.assertRaises(urllib.error.HTTPError):
+            self.call("GET", [502, 502, 502, 502])

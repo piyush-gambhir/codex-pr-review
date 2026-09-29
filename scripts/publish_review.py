@@ -19,11 +19,13 @@ Standard library only, so it runs on any runner without installing anything.
 from __future__ import annotations
 
 import html
+import http.client
 import json
 import os
 import pathlib
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -113,6 +115,20 @@ def parse_priority(value: str, default: int | None) -> int | None:
 # GitHub API ------------------------------------------------------------------
 
 
+# Transient failures worth another attempt. GitHub drops idle connections and
+# answers 5xx or 429 under load; a review shouldn't die on one of those.
+RETRY_STATUSES = {429, 500, 502, 503, 504}
+# Statuses where GitHub has not acted on the request, so even a POST is safe to repeat.
+NOT_PROCESSED = {429, 503}
+RETRY_DELAYS = (2, 5, 10)
+
+
+def is_idempotent(method: str, url: str | None) -> bool:
+    """Safe to repeat after an ambiguous failure: reads, and our GraphQL calls
+    (minimizing a comment or resolving a thread twice changes nothing)."""
+    return method in ("GET", "HEAD", "PUT", "DELETE") or (url or "").endswith("/graphql")
+
+
 def github(method: str, path: str, token: str, payload: dict | None = None, url: str | None = None):
     request = urllib.request.Request(
         url or f"{API}{path}",
@@ -124,9 +140,24 @@ def github(method: str, path: str, token: str, payload: dict | None = None, url:
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
-    with urllib.request.urlopen(request) as response:
-        body = response.read()
-        return json.loads(body) if body else None
+    for attempt, delay in enumerate(RETRY_DELAYS + (None,)):
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                body = response.read()
+                return json.loads(body) if body else None
+        except urllib.error.HTTPError as error:
+            statuses = RETRY_STATUSES if is_idempotent(method, url) else NOT_PROCESSED
+            if delay is None or error.code not in statuses:
+                raise
+            reason = f"HTTP {error.code}"
+        except (urllib.error.URLError, http.client.HTTPException, ConnectionError, TimeoutError) as error:
+            # A dropped connection may have reached GitHub, so only repeat what's safe.
+            if delay is None or not is_idempotent(method, url):
+                raise
+            reason = type(error).__name__
+        print(f"::warning::GitHub API {method} failed ({reason}); retrying in {delay}s (attempt {attempt + 2}).")
+        time.sleep(delay)
+    return None
 
 
 def paginate(path: str, token: str) -> list:
