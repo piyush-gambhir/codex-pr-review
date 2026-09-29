@@ -1,8 +1,12 @@
 import pathlib
 import sys
 import tempfile
-import tomllib
 import unittest
+
+try:
+    import tomllib
+except ImportError:  # Python < 3.11: the config tests need a TOML parser
+    tomllib = None
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 import write_config as wc  # noqa: E402
@@ -10,6 +14,7 @@ import write_config as wc  # noqa: E402
 BASE = {"CODEX_PROVIDER": "openai", "MODEL": "gpt-6.1-sol", "REASONING_EFFORT": "medium", "SANDBOX": "read-only"}
 
 
+@unittest.skipIf(tomllib is None, "tomllib needs Python 3.11+")
 class WriteConfigTest(unittest.TestCase):
     def test_minimal_config(self):
         cfg = tomllib.loads(wc.build_config(BASE))
