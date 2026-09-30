@@ -2,7 +2,7 @@
 
 This project follows [semantic versioning](https://semver.org). The `v1` tag always points to the latest 1.x release; breaking input or output changes get a new major version.
 
-## Unreleased
+## v1.3.0 (2026-09-30)
 
 Faster and cheaper reviews, and a GitHub-native look with no emoji.
 
@@ -25,6 +25,10 @@ Faster and cheaper reviews, and a GitHub-native look with no emoji.
 - **No emoji anywhere.** Everything the action posts or writes now uses GitHub's own visual language instead: the verdict, the progress note, the failure note, the skip note and the check run summary are [alert blocks](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#alerts), so GitHub draws the icon, the colour and the border. The verdict type follows the worst priority reported: `CAUTION` for P0 or P1, `WARNING` for P2, `NOTE` for P3 only, `TIP` when the diff is clean. A progress note is a `NOTE`, a failure a `CAUTION` with the error in a code block, a skip a `WARNING`.
 - The priority dots, speech balloon, down arrow, light bulb, check marks, magnifier, cross mark and skip symbol are replaced by the 16px [Octicons](icons/) in the new `icons/` directory (MIT, from `@primer/octicons` 19.38.0), each recoloured for what it means. P0 to P3 are four different glyphs rather than one glyph in four colours. Every colour clears 3:1 WCAG contrast against both GitHub's light (`#ffffff`) and dark (`#0d1117`) comment backgrounds, so no `prefers-color-scheme` switching is needed; [`icons/README.md`](icons/README.md) lists the measured ratios.
 - The issues table names its last column **Where** and says `Inline` or `Below` in words next to the icon, instead of an emoji. Every `<img>` carries meaningful `alt` text and an explicit 16x16 size, so a review reads correctly before or without the images.
+
+### Fixed
+
+- A finding only counts as resolved when its file changed since the last reviewed commit. Codex isn't deterministic, so on an identical commit a reworded or dropped finding was reported as resolved and its thread closed; such findings are now listed as still open.
 
 ### Release checklist
 
