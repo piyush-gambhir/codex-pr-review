@@ -659,7 +659,9 @@ runs:
         CODEX_HOMES_FILE: ${{ runner.temp }}/codex-review-homes.txt
         COVERAGE_FILE: ${{ runner.temp }}/codex-review-coverage.json
         REVIEW_MODE: ${{ steps.guard.outputs.review-mode }}
-        BASE_REF: ${{ inputs.base-ref }}
+        # The base the review actually ran against, so an incremental run is
+        # measured against the files it was asked to look at.
+        BASE_REF: ${{ steps.history.outputs.review-base || inputs.base-ref }}
         REVIEW_WORKSPACE: ${{ github.workspace }}/${{ inputs.working-directory }}
         INCLUDE_PATHS: ${{ inputs.include-paths }}
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}

@@ -173,8 +173,9 @@ fi
 PRICING="${PRICING:-{\"local ChatGPT login\": [2, 0.2, 10]}}" python3 "$root/scripts/usage.py"
 export USAGE_TEXT="$(output usage-text)"
 
-# What the reviewer actually read. A full review has already written the file.
-(cd "$checkout" && python3 "$root/scripts/coverage.py")
+# What the reviewer actually read, against the base it actually used. A full
+# review has already written the file.
+(cd "$checkout" && BASE_REF="$review_base" python3 "$root/scripts/coverage.py")
 
 # SARIF is a local file, so it is written in dry runs too.
 extras() {
