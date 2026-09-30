@@ -2,6 +2,12 @@
 
 This project follows [semantic versioning](https://semver.org). The `v1` tag always points to the latest 1.x release; breaking input or output changes get a new major version.
 
+## v1.2.1 (2026-09-30)
+
+### Removed
+
+- The project icon (`assets/`) and the Marketplace branding icons in `action.yml` and `trigger/action.yml`. The bot's avatar comes from the GitHub App you create; the README explains where to set it.
+
 ## v1.2.0 (2026-09-30)
 
 ### Changed

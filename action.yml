@@ -4,9 +4,6 @@ description: >-
   the OpenAI API or Amazon Bedrock (GitHub OIDC), and post an issues list with
   file:line links plus inline comments.
 author: Piyush Gambhir
-branding:
-  icon: eye
-  color: purple
 
 inputs:
   # Model and provider

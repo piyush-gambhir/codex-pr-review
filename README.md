@@ -1,5 +1,3 @@
-<p align="center"><img src="assets/icon.png" width="96" alt="Codex PR Review icon"></p>
-
 <h1 align="center">Codex PR Review</h1>
 
 <p align="center">On-demand pull request reviews from <b>Codex's native reviewer</b>, on OpenAI models via the <b>OpenAI API</b> or <b>Amazon Bedrock</b>.</p>
@@ -255,12 +253,12 @@ Needs `checks: write`. Without it the API answers 403, the action warns and the 
 By default reviews are posted by `github-actions`. To post under your own name and icon, use a GitHub App:
 
 1. Create a GitHub App (Settings → Developer settings → GitHub Apps → New). Name it what you want the bot to be called, for example `Acme Code Review`. Disable the webhook. Repository permissions: **Pull requests: read and write**, **Issues: read and write**.
-2. Upload a logo. [`assets/icon.png`](assets/icon.png) is free to use, or bring your own.
+2. Upload the logo you want the bot to show (App settings → Display information).
 3. Install the app on your repository, and generate a private key.
 4. Add the repository variable `CODEX_REVIEW_APP_CLIENT_ID` (the app's **Client ID**, shown on its settings page) and the secret `CODEX_REVIEW_APP_PRIVATE_KEY` (the `.pem` contents).
 5. Pass the client ID to the reusable workflow: `with: { app-client-id: "${{ vars.CODEX_REVIEW_APP_CLIENT_ID }}" }`.
 
-The workflow mints an app token with `actions/create-github-app-token` and passes it as `github-token`. Reviews then appear as `your-app-name[bot]` with your logo. Please don't use OpenAI's or Codex's name or logo for your app, so readers don't mistake it for an official product.
+The workflow mints an app token with `actions/create-github-app-token` and passes it as `github-token`. Reviews then appear as `your-app-name[bot]` with the app's logo. If you use the Codex name or logo for the app, check OpenAI's brand guidelines first.
 
 ## Amazon Bedrock
 

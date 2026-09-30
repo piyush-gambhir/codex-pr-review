@@ -4,9 +4,6 @@ description: >-
   labels or manual runs, check write access and the pull request, and report the
   PR number, head SHA, base ref, provider and effort.
 author: Piyush Gambhir
-branding:
-  icon: filter
-  color: purple
 
 inputs:
   command:
