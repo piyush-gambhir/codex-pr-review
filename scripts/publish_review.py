@@ -30,6 +30,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import coverage  # noqa: E402
 import filters  # noqa: E402
 import history  # noqa: E402
 import icons as icon_set  # noqa: E402
@@ -242,6 +243,8 @@ class Context:
         self.label = env.get("LABEL", "").strip()
         self.effort = env.get("REASONING_EFFORT", "").strip()
         self.tokens = env.get("USAGE_TEXT", "").strip()
+        # How much of the diff the reviewer actually read (see coverage.py).
+        self.coverage = coverage.summary(coverage.load(env.get("COVERAGE_FILE", "").strip()))
         self.run_url = env.get("RUN_URL", "").strip()
         self.rerun_hint = env.get("RERUN_HINT", "").strip()
         self.note = ""
@@ -273,6 +276,8 @@ class Context:
             parts.append(f"`{self.model}`" + (f" via {self.label}" if self.label else ""))
         if self.effort:
             parts.append(f"{self.effort} effort")
+        if self.coverage:
+            parts.append(self.coverage)
         if self.tokens:
             parts.append(self.tokens)
         if self.run_url:

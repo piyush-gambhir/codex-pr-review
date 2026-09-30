@@ -147,6 +147,25 @@ class RenderTest(unittest.TestCase):
         self.assertIn("`gpt-6.1-sol` via OpenAI API", body)
         self.assertIn("[View run](https://github.com/o/r/actions/runs/9)", body)
         self.assertIn("Comment `@gpt review` to re-run.", body)
+        # No coverage file, no coverage claim.
+        self.assertNotIn("Coverage", body)
+
+    def test_the_meta_line_says_how_much_was_covered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp, "coverage.json")
+            path.write_text(json.dumps({"mode": "full", "complete": True, "files_total": 224,
+                                        "files_inspected": 224, "uncovered": [], "shards": 9,
+                                        "passes": 12}), encoding="utf-8")
+            body = pr.body_markdown("Summary.", [], ctx(COVERAGE_FILE=str(path)))
+            self.assertIn("Coverage 224/224 files (full, 12 passes)", body)
+            path.write_text(json.dumps({"mode": "single", "complete": False, "files_total": 30,
+                                        "files_inspected": 4, "uncovered": ["a.ts"], "shards": 1,
+                                        "passes": 1}), encoding="utf-8")
+            self.assertIn("Coverage 4/30 files (single, 1 pass)",
+                          pr.body_markdown("Summary.", [], ctx(COVERAGE_FILE=str(path))))
+            # A missing or unreadable file is simply not mentioned.
+            self.assertNotIn("Coverage", pr.body_markdown(
+                "Summary.", [], ctx(COVERAGE_FILE=str(pathlib.Path(tmp, "nothing.json")))))
 
     def test_inline_comment_links_back(self):
         text = pr.inline_comment(self.findings[0], ctx())

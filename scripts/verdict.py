@@ -189,6 +189,9 @@ def coverage_confidence(report: dict) -> tuple:
     seen = max(int(report.get("files_inspected") or 0), 0)
     complete = bool(report.get("complete"))
     where = "%d/%d files inspected" % (seen, total) if total else "coverage reported"
+    if total == 0:
+        # Nothing left to read after the path filters: nothing was missed either.
+        return "high", "no changed files in scope"
     if complete and seen >= total:
         return "high", "full coverage, " + where
     share = 1.0 if total <= 0 else min(seen / float(total), 1.0)

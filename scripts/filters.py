@@ -8,10 +8,12 @@ Two independent pieces, both driven by the action's inputs:
   about are dropped;
 * the `max-changed-lines` guard, which counts added plus deleted lines between
   the merge base of `base-ref` and HEAD (skipping paths the filter excludes) and
-  decides whether to skip the review altogether.
+  decides whether to skip the review altogether, or to review it shard by shard
+  (`review-mode`, see full_review.py).
 
 Run as a script it performs the guard from the pull request checkout and writes
-the `changed-lines`, `skip` and `note` step outputs. Standard library only.
+the `changed-lines`, `skip`, `note` and `review-mode` step outputs. Standard
+library only.
 """
 
 from __future__ import annotations
@@ -171,8 +173,8 @@ def parse_limit(value: str) -> int | None:
 
 def parse_mode(value: str) -> str:
     mode = (value or "").strip().lower() or "warn"
-    if mode not in ("skip", "warn"):
-        raise SystemExit(f"::error::Invalid large-pr '{value}'; use skip or warn.")
+    if mode not in ("skip", "warn", "full"):
+        raise SystemExit(f"::error::Invalid large-pr '{value}'; use warn, skip or full.")
     return mode
 
 
@@ -182,7 +184,40 @@ def guard_decision(changed: int, limit: int | None, mode: str) -> tuple[bool, st
         return False, ""
     if mode == "skip":
         return True, f"PR too large to review ({changed} changed lines, limit {limit})."
+    if mode == "full":
+        # The full review covers it, so the size is not a caveat; the coverage
+        # line under the review says how much of it was actually read.
+        return False, ""
     return False, f"Large PR: {changed} changed lines, over the {limit} line limit, so this review may be incomplete."
+
+
+# Review mode ------------------------------------------------------------------
+
+REVIEW_MODES = ("single", "full", "auto")
+
+
+def parse_review_mode(value: str) -> str:
+    """review-mode: `single`, `full` or `auto` (empty means `single`)."""
+    mode = (value or "").strip().lower() or "single"
+    if mode not in REVIEW_MODES:
+        raise SystemExit(f"::error::Invalid review-mode '{value}'; use single, full or auto.")
+    return mode
+
+
+def resolve_review_mode(review_mode: str, large_pr: str, changed: int, limit: int | None) -> str:
+    """`single` or `full`: what this run actually does.
+
+    `full` is asked for outright, or reached by `auto` (and by `large-pr: full`,
+    which says the same thing from the size guard's side) once the diff is over
+    `max-changed-lines`. Without a limit there is no size to be over, so `auto`
+    stays single.
+    """
+    if review_mode == "full":
+        return "full"
+    oversized = limit is not None and changed > limit
+    if oversized and (review_mode == "auto" or large_pr == "full"):
+        return "full"
+    return "single"
 
 
 def set_output(key: str, value: str) -> None:
@@ -195,15 +230,19 @@ def main() -> int:
     env = os.environ
     limit = parse_limit(env.get("MAX_CHANGED_LINES", ""))
     mode = parse_mode(env.get("LARGE_PR", ""))
+    review_mode = parse_review_mode(env.get("REVIEW_MODE", ""))
     paths = PathFilter.from_env(dict(env))
     changed = changed_lines(env.get("BASE_REF", "").strip(), ".", paths)
     skip, note = guard_decision(changed, limit, mode)
+    resolved = resolve_review_mode(review_mode, mode, changed, limit)
     print(f"Changed lines: {changed}" + (f", limit {limit} ({mode})" if limit else ", no limit"))
+    print(f"Review mode: {resolved}" + (f" (asked for {review_mode})" if review_mode != resolved else ""))
     if note:
         print(f"::notice::{note}")
     set_output("changed-lines", str(changed))
     set_output("skip", "true" if skip else "false")
     set_output("note", note if not skip else "")
+    set_output("review-mode", resolved)
     return 0
 
 

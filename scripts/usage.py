@@ -50,10 +50,26 @@ REGION_PREFIXES = ("us.", "eu.", "apac.", "global.")
 # Reading the rollout ---------------------------------------------------------
 
 
-def usage_events(sessions: pathlib.Path) -> list[tuple[pathlib.Path, dict, dict | None]]:
+def rollouts(sessions) -> list[pathlib.Path]:
+    """Every rollout under one `sessions` directory or a list of them.
+
+    A full review runs each pass in its own `CODEX_HOME`, so the cost of the run
+    is the cost of all of them together (see full_review.py).
+    """
+    if isinstance(sessions, (str, pathlib.Path)):
+        sessions = [sessions]
+    found: list[pathlib.Path] = []
+    for directory in sessions:
+        directory = pathlib.Path(directory)
+        if directory.is_dir():
+            found.extend(sorted(directory.rglob("rollout-*.jsonl")))
+    return found
+
+
+def usage_events(sessions) -> list[tuple[pathlib.Path, dict, dict | None]]:
     """(rollout file, running total, single request) per usage event, in file order."""
     events = []
-    for path in sorted(sessions.rglob("rollout-*.jsonl")):
+    for path in rollouts(sessions):
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
                 event = json.loads(line)
@@ -68,20 +84,23 @@ def usage_events(sessions: pathlib.Path) -> list[tuple[pathlib.Path, dict, dict 
     return events
 
 
-def collect(sessions: pathlib.Path) -> tuple[dict[str, int], list[dict]]:
+def collect(sessions) -> tuple[dict[str, int], list[dict]]:
     """Totals across every rollout, plus each model request seen.
 
     Running totals are per rollout file (one thread), so the last one in each
-    file is taken and those are summed. Requests are de-duplicated because
-    `token_usage_record` and `token_count` report the same request twice.
+    file is taken and those are summed. Requests are de-duplicated within a file,
+    because `token_usage_record` and `token_count` report the same request twice;
+    two passes that happen to use the same tokens are still two requests.
     """
     per_file: dict[pathlib.Path, dict] = {}
+    last: dict[pathlib.Path, dict] = {}
     requests: list[dict] = []
     for path, total, request in usage_events(sessions):
         if total:
             per_file[path] = total
-        if request and request != (requests[-1] if requests else None):
+        if request and request != last.get(path):
             requests.append(request)
+            last[path] = request
     totals = {key: 0 for key in ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens")}
     for total in per_file.values():
         for key in totals:
@@ -162,10 +181,24 @@ def set_output(key: str, value: str) -> None:
 # Main ------------------------------------------------------------------------
 
 
+def session_dirs(env: dict[str, str]) -> list[pathlib.Path]:
+    """The `sessions` directory of every Codex home this run wrote rollouts to.
+
+    A single review has one; a full review lists its per-pass homes in the file
+    `CODEX_HOMES_FILE` names, so the cost covers every pass.
+    """
+    listed = (env.get("CODEX_HOMES_FILE") or "").strip()
+    homes: list[str] = []
+    if listed and pathlib.Path(listed).is_file():
+        homes = [line.strip() for line in
+                 pathlib.Path(listed).read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [pathlib.Path(home) / "sessions" for home in homes or [env.get("CODEX_HOME", ".")]]
+
+
 def main() -> int:
     env = os.environ
-    sessions = pathlib.Path(env.get("CODEX_HOME", ".")) / "sessions"
-    totals, requests = collect(sessions) if sessions.is_dir() else ({}, [])
+    sessions = session_dirs(dict(env))
+    totals, requests = collect(sessions)
     if not totals or not totals["input_tokens"] + totals["output_tokens"]:
         print("Usage: unknown (no token counts in the Codex session rollout).")
         return 0

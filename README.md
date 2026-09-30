@@ -109,7 +109,7 @@ Three ways to ask for a review, all handled by the same gate:
 
 | Trigger | How | Notes |
 |---|---|---|
-| Comment | `@gpt review [openai\|bedrock] [low\|medium\|high\|xhigh] [force]` at the start of a PR comment | Options come from the first line; the comment gets an eyes reaction, then rocket (answered) or confused (failed) |
+| Comment | `@gpt review [openai\|bedrock] [low\|medium\|high\|xhigh] [full] [force]` at the start of a PR comment | Options come from the first line; `full` reviews every changed file (see [Full reviews](#full-reviews)); the comment gets an eyes reaction, then rocket (answered) or confused (failed) |
 | Label | Add the `codex-review` label to the PR | The label is removed again, so re-adding it re-runs the review. Set `label: ""` to switch this off |
 | Manual | Actions tab, the workflow, **Run workflow**, then the PR number | Add a `workflow_dispatch` input named `pr-number` and pass it through as `pr-number` |
 
@@ -125,6 +125,10 @@ Everything is optional. `base-branches` defaults to your repository's default br
 | `command` | `@gpt review` | Comment prefix that requests a review |
 | `skip-unchanged` | `true` | Skip a re-review of a commit that already has one with the same settings |
 | `force` | `false` | Make label and manual runs review even when nothing changed |
+| `review-mode` | `single` | `single`, `full` or `auto`; `@gpt review full` asks for one run |
+| `max-changed-lines` | | Size above which `review-mode: auto` reviews shard by shard |
+| `shard-lines` | `2500` | Changed lines per shard in a full review |
+| `timeout-minutes` | `30` | Job timeout; raise it for full reviews |
 | `label` | `codex-review` | Label that requests a review; empty turns label triggers off |
 | `remove-label` | `true` | Remove the label again, so it can be re-added to re-run |
 | `default-provider` | `openai` | Provider when the request does not name one |
@@ -158,7 +162,7 @@ To keep your own review job and only reuse the gate, use the trigger action on i
     label: codex-review
 ```
 
-It outputs `run` (`true` or `false`), `pr-number`, `head-sha`, `base-ref` (already `origin/`-prefixed), `provider`, `effort`, `force`, `comment-id` and `reason` (why no review runs, e.g. `no-command`, `no-write-access`, `fork`, `base-branch-not-allowed`). It needs `pull-requests: write` and `issues: write` to react, reply and remove the label.
+It outputs `run` (`true` or `false`), `pr-number`, `head-sha`, `base-ref` (already `origin/`-prefixed), `provider`, `effort`, `full`, `force`, `comment-id` and `reason` (why no review runs, e.g. `no-command`, `no-write-access`, `fork`, `base-branch-not-allowed`). It needs `pull-requests: write` and `issues: write` to react, reply and remove the label.
 
 > **How the reusable workflow finds its own action.** `github.workflow_ref` and `github.workflow_sha` describe the *caller*, and `./` resolves against the caller's checkout, so neither can name the action version that belongs with the workflow. Each job instead checks out `job.workflow_repository` at `job.workflow_sha` (the workflow file defining the running job, which is this workflow) and uses the action from that checkout. So `@v1.1.0` of the workflow runs v1.1.0 of the action, a full-SHA pin runs that SHA, and a private copy of this repository uses itself. The trade-off: [`job.workflow_*`](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#job-context) does not exist on GitHub Enterprise Server, so use the standalone example there.
 
@@ -247,7 +251,7 @@ With `incremental: true` a re-review looks only at the commits pushed since the 
 
 A review costs a model call and about a minute. Three things make sure you only pay when there is something to pay for.
 
-**The same commit is not reviewed twice.** Every posted review's state marker carries a digest of the settings that produced it: provider, model, effort, base ref, guidelines, path filters, priority cut-off and post mode. When a request arrives for a commit that already has a review with the same digest, nothing is installed and no model is called; a short note goes up linking to the review that is already there. Ask again with `force` (`@gpt review force`) to review it anyway, or set `skip-unchanged: false` to turn it off. Anything that could change the answer stops the skip on its own, including a marker written before this feature existed. The `skipped`, `skip-reason` and `existing-review-url` outputs say what happened.
+**The same commit is not reviewed twice.** Every posted review's state marker carries a digest of the settings that produced it: provider, model, effort, base ref, review mode, guidelines, path filters, priority cut-off and post mode. Review mode is in there, so a single review never satisfies a later `@gpt review full` on the same commit. When a request arrives for a commit that already has a review with the same digest, nothing is installed and no model is called; a short note goes up linking to the review that is already there. Ask again with `force` (`@gpt review force`) to review it anyway, or set `skip-unchanged: false` to turn it off. Anything that could change the answer stops the skip on its own, including a marker written before this feature existed. The `skipped`, `skip-reason` and `existing-review-url` outputs say what happened.
 
 **A newer request cancels the one in flight.** The review job's concurrency group is per pull request with `cancel-in-progress: true`, so pushing a fix and asking again does not leave the first review running against the old commit. The cancelled run removes its own progress note and posts no failure note; the run that replaced it posts its own.
 
@@ -293,11 +297,43 @@ A block only becomes a real GitHub suggestion when the inline comment covers exa
 
 - `large-pr: warn` (the default) reviews anyway and adds a note under the review.
 - `large-pr: skip` posts a short "PR too large to review" note and finishes successfully without calling Codex, so nothing is spent on it.
+- `large-pr: full` reviews it shard by shard instead, which is the same thing as `review-mode: auto` (see [Full reviews](#full-reviews)).
 
 ```yaml
 max-changed-lines: 3000
 large-pr: skip
 ```
+
+### Full reviews
+
+One `codex exec review` pass samples. On a 48,773-line pull request (406 files) it made 29 model requests in about four minutes and reported six findings, all in two areas: Codex reads what looks risky and stops. That is the right trade for an ordinary PR and the wrong one for a big rewrite, where the question is not "what stands out" but "was any of this read at all".
+
+`review-mode: full` answers that question. Ask for it per run (`@gpt review full`), always (`review-mode: full`), or only over a size you choose (`review-mode: auto` with `max-changed-lines`).
+
+```yaml
+review-mode: auto
+max-changed-lines: 3000
+shard-lines: 2500      # changed lines per shard
+max-parallel: 4        # shard passes at once
+max-shards: 24         # a bigger PR gets bigger shards, not more passes
+```
+
+**How a shard keeps the whole pull request.** The diff is cut into shards of about `shard-lines` changed lines, keeping directories together, never splitting a file, and packing tests after the source they belong with. Each shard is then reviewed in a checkout of the **full** pull request head, against a synthetic base commit that is HEAD's tree with only that shard's files put back to their merge-base versions. `git diff <that commit> HEAD` is exactly the shard, while every other file is present at its final state, so Codex reads the real callers and the real call sites rather than a slice of a diff. The commits are built with Git plumbing against a temporary index: no ref is created, and neither your working tree nor the repository's index is touched.
+
+Shard passes run concurrently, each with its own `CODEX_HOME` so their session rollouts never collide, and each bounded by `pass-timeout-minutes` inside an overall `review-budget-minutes`. Then two more passes: any changed file no pass actually read gets one follow-up pass of its own, and a final **cross-cutting** pass reviews the whole diff with the per-area summaries in its instructions, asked only for what a single area cannot show (an API change against its callers, wiring, auth applied unevenly, a migration against the code that reads those columns). Every pass's findings are merged and de-duplicated on the same fingerprint re-reviews use, keeping the worst priority and any suggested fix, and posted as one review.
+
+**What it costs.** Roughly one model call per shard plus two, and the passes overlap, so the wall clock is about `shards / max-parallel` times a single review rather than `shards` times it. The review's meta line and the `input-tokens`, `output-tokens` and `estimated-cost-usd` outputs cover every pass together. Give the job room: `timeout-minutes` should be comfortably above `review-budget-minutes` plus the install.
+
+**What coverage means.** Every run, in both modes, writes `$RUNNER_TEMP/codex-review-coverage.json`:
+
+```json
+{"mode": "full", "complete": true, "files_total": 224, "files_inspected": 224,
+ "uncovered": [], "shards": 9, "passes": 12}
+```
+
+and shows it in the meta line under the review (`Coverage 224/224 files (full, 12 passes)`), with `coverage-files-total`, `coverage-files-inspected` and `coverage-complete` as outputs. It is measured, not assumed: [`scripts/coverage.py`](scripts/coverage.py) reads the session rollouts Codex wrote and counts a changed file as inspected when Codex read the file itself (`cat`, `sed -n`, `nl`, a file-reading tool call) or read a diff whose output contained it. Listings and searches (`ls`, `rg`, `git diff --stat`) do not count, and a diff that was truncated before it reached a file counts only as far as it got. A pass that times out or fails leaves its files in `uncovered` rather than disappearing.
+
+**The honest caveat.** "Inspected" means the reviewer had the file in front of it, not that every bug in it was found. `complete: true` rules out one failure mode, the file nobody looked at; it does not promise the review is right. Treat it as a floor under the review's scope, not a guarantee about its findings.
 
 ### Output
 
@@ -432,7 +468,13 @@ The workflow mints an app token with `actions/create-github-app-token` and passe
 | `include-paths` | | Only report findings in files matching these globs (newline or comma separated) |
 | `exclude-paths` | | Never report findings in files matching these globs; Codex is told to skip them too |
 | `max-changed-lines` | | Added plus deleted lines above which `large-pr` applies; empty means no limit |
-| `large-pr` | `warn` | Over the limit: `warn` (review anyway) or `skip` (post a note, skip the review) |
+| `large-pr` | `warn` | Over the limit: `warn` (review anyway), `skip` (post a note, skip the review) or `full` (review it shard by shard) |
+| `review-mode` | `single` | `single`, `full` (every changed file, shard by shard) or `auto` (full over `max-changed-lines`); see [Full reviews](#full-reviews) |
+| `shard-lines` | `2500` | Changed lines per shard in a full review |
+| `max-shards` | `24` | Most shards a full review may plan; a bigger PR gets bigger shards, not more passes |
+| `max-parallel` | `4` | Shard passes to run at once, each with its own `CODEX_HOME` |
+| `pass-timeout-minutes` | `10` | How long one pass may take; a pass that runs out is reported as uncovered |
+| `review-budget-minutes` | `20` | How long all the passes may take together; keep the job's `timeout-minutes` above it |
 | **Review behaviour** | | |
 | `suggestions` | `true` | Ask Codex for committable fixes as GitHub suggestions |
 | `review-instructions` | | Inline review guidelines |
@@ -482,6 +524,10 @@ The workflow mints an app token with `actions/create-github-app-token` and passe
 | `resolved-count` | Previous findings no longer reported (fixed since the last review) |
 | `path-filtered-count` | Findings hidden by `include-paths` or `exclude-paths` |
 | `changed-lines` | Added plus deleted lines between the merge base and HEAD, after the path filters |
+| `review-mode` | What this run did: `single` or `full` |
+| `coverage-files-total` | Changed files the review was meant to cover, after the path filters |
+| `coverage-files-inspected` | Changed files Codex actually read, from the session rollouts |
+| `coverage-complete` | `true` when every changed file was inspected |
 | `findings-file` | JSON file: `priority`, `title`, `path`, `start`, `end`, `body`, `fingerprint`, `suggestion` per finding |
 | `review-file` | Codex's raw review message |
 | `input-tokens` | Input tokens used, cached ones included; empty when Codex reported no usage |
@@ -517,17 +563,18 @@ pricing: '{"my-fine-tune": [2, 0.2, 10]}'
 
 ## How it works
 
-1. **Size guard**: [`scripts/filters.py`](scripts/filters.py) counts the changed lines between the merge base and HEAD. Over `max-changed-lines` with `large-pr: skip`, a note goes up and the remaining steps are skipped.
+1. **Size guard and review mode**: [`scripts/filters.py`](scripts/filters.py) counts the changed lines between the merge base and HEAD. Over `max-changed-lines` with `large-pr: skip`, a note goes up and the remaining steps are skipped. The same count resolves `review-mode` to `single` or `full`, which the settings digest below then carries.
 2. **Previous review**: [`scripts/history.py`](scripts/history.py) reads the state marker in the last Codex review on the PR, and with `incremental` checks whether that commit is still an ancestor of the head. It runs before anything is posted, so [`scripts/pr_state.py`](scripts/pr_state.py) can read the whole conversation in one GraphQL call and hand the later steps what they need (the comments to collapse, the threads to resolve) instead of listing the pull request again.
 3. **Already reviewed?** [`scripts/rereview.py`](scripts/rereview.py) compares the marker's commit and settings digest with this run's. A match posts a note linking to that review and skips everything below. Nothing has been installed or posted at this point.
 4. **Progress note**: posted on the PR with a link to the run.
 5. **Install**: [`scripts/install_plan.py`](scripts/install_plan.py) works out the cache key, the CLI is restored with `actions/cache`, and Node.js, pnpm and the install itself only happen when the restored CLI is not usable. Installs go into `RUNNER_TEMP` with install scripts disabled.
 6. **Credentials**: for `bedrock`, `aws-actions/configure-aws-credentials` assumes the role via OIDC and returns credentials as step outputs. For `openai`, the key is passed as `CODEX_API_KEY`. Only the review step receives them, and no GitHub token reaches Codex.
 7. **Config**: [`scripts/write_config.py`](scripts/write_config.py) writes Codex's `config.toml`: provider, model, effort, a read-only sandbox, no approvals, your guidelines, and a minimal environment (`shell_environment_policy.inherit = "core"`) so commands Codex runs never see the credentials.
-8. **Review**: `codex exec review --base <base-ref>` reviews the diff against the merge base.
-9. **Usage**: [`scripts/usage.py`](scripts/usage.py) reads the real token counts out of the session rollout Codex wrote in `CODEX_HOME` (review mode reports zero usage on its `turn.completed` event) and estimates the cost from the price table.
-10. **Publish**: [`scripts/publish_review.py`](scripts/publish_review.py) parses the findings, works out the merge verdict, health score and confidence with [`scripts/verdict.py`](scripts/verdict.py), and posts the review. If GitHub rejects the review event or an inline anchor, each is given up in turn rather than losing the review. The pull request is labelled with the verdict. [`scripts/status.py`](scripts/status.py) then clears the progress note, or turns it into a failure note. A failed or empty review never looks like a pass. Fixed findings are listed as resolved and their threads are resolved, best effort.
-11. **Checks and SARIF** (optional): [`scripts/checks.py`](scripts/checks.py) completes the check run with the verdict and the annotations, and [`scripts/sarif.py`](scripts/sarif.py) turns the findings JSON into a SARIF 2.1.0 file. Neither can fail the review.
+8. **Review**: `codex exec review --base <base-ref>` reviews the diff against the merge base. In `full` mode [`scripts/full_review.py`](scripts/full_review.py) runs that once per shard instead: [`scripts/shards.py`](scripts/shards.py) plans the shards and builds each one's synthetic base with Git plumbing, the passes run concurrently in reused worktrees of the pull request head, and the findings of every pass are merged back into one review message in Codex's own layout.
+9. **Usage**: [`scripts/usage.py`](scripts/usage.py) reads the real token counts out of the session rollouts Codex wrote (review mode reports zero usage on its `turn.completed` event) and estimates the cost from the price table. A full review lists its per-pass homes in `CODEX_HOMES_FILE`, so the cost covers all of them.
+10. **Coverage**: [`scripts/coverage.py`](scripts/coverage.py) reads the same rollouts for the commands Codex ran and works out which changed files it actually looked at, writing `$RUNNER_TEMP/codex-review-coverage.json` in both modes.
+11. **Publish**: [`scripts/publish_review.py`](scripts/publish_review.py) parses the findings, works out the merge verdict, health score and confidence with [`scripts/verdict.py`](scripts/verdict.py), and posts the review. If GitHub rejects the review event or an inline anchor, each is given up in turn rather than losing the review. The pull request is labelled with the verdict. [`scripts/status.py`](scripts/status.py) then clears the progress note, or turns it into a failure note. A failed or empty review never looks like a pass. Fixed findings are listed as resolved and their threads are resolved, best effort.
+12. **Checks and SARIF** (optional): [`scripts/checks.py`](scripts/checks.py) completes the check run with the verdict and the annotations, and [`scripts/sarif.py`](scripts/sarif.py) turns the findings JSON into a SARIF 2.1.0 file. Neither can fail the review.
 
 ## Security
 
@@ -559,6 +606,20 @@ The tests cover:
 - the settings digest, what does and does not change it, and the skip decision for every case
 - the install plan: the runner probes, exact versus floating versions, lockfile parsing and cache keys
 - how many times a run reads the pull request, with and without the shared read
+- shard planning (directories kept together, files never split, tests apart, a deterministic order, the shard budget) and the synthetic bases, against real temporary repositories: added, deleted, renamed and binary files, that `git diff` between the two commits is the shard and nothing else, and that building them touches no ref, index or working tree
+- coverage extraction from a captured session rollout: what counts as reading a file, what a summary diff and a search do not count as, where a truncated diff stops, and the coverage file in both modes
+- a whole full review against a temporary repository with a stand-in reviewer: two shards, per-pass homes, the cross-cutting pass, the merge, summed usage, and worktrees left clean
+- merging and de-duplicating findings across passes, and that the merged message parses back as a Codex review
+- a pass that times out, one that fails and one that never starts
+
+The end-to-end harness runs the real thing against a real pull request with your local Codex login:
+
+```bash
+GH_TOKEN=$(gh auth token) scripts/dev/e2e_local.sh <owner/repo> <pr>
+FULL=1 SHARD_LINES=10 GH_TOKEN=$(gh auth token) scripts/dev/e2e_local.sh <owner/repo> <pr>
+```
+
+`DRY_RUN=1` posts nothing. A tiny `SHARD_LINES` forces real sharding on a small pull request.
 
 ## License
 

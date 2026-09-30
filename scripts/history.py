@@ -115,6 +115,9 @@ SETTINGS = (
     ("model", "MODEL", ""),
     ("effort", "REASONING_EFFORT", "lower"),
     ("base", "BASE_REF", ""),
+    # The resolved mode, so a single review never satisfies a request for a full
+    # one (and the other way round).
+    ("review-mode", "REVIEW_MODE", "lower"),
     ("incremental", "INCREMENTAL", "lower"),
     ("suggestions", "SUGGESTIONS", "lower"),
     ("max-priority", "MAX_PRIORITY", "upper"),

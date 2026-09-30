@@ -392,3 +392,11 @@ class LabelTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EmptyScopeTest(unittest.TestCase):
+    def test_no_files_in_scope_is_not_a_partial_review(self):
+        # The coverage writer reports complete=false for an empty diff; nothing was missed.
+        level, reason = verdict.coverage_confidence({"mode": "single", "complete": False, "files_total": 0,
+                                                     "files_inspected": 0, "uncovered": [], "shards": 0, "passes": 1})
+        self.assertEqual((level, reason), ("high", "no changed files in scope"))
