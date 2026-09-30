@@ -2,6 +2,12 @@
 
 This project follows [semantic versioning](https://semver.org). The `v1` tag always points to the latest 1.x release; breaking input or output changes get a new major version.
 
+## v1.1.1 (2026-09-30)
+
+### Changed
+
+- Codex CLI pin bumped to 0.159.2 (verified end to end: parsing, usage, re-review tracking, suggestions and SARIF unchanged). `codex-version: latest` is documented for always-newest installs.
+
 ## v1.1.0 (2026-09-30)
 
 ### Added

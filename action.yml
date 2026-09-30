@@ -121,8 +121,8 @@ inputs:
     description: "Extra raw TOML appended to the generated Codex config.toml (top-level keys or tables)."
     default: ""
   codex-version:
-    description: "Pinned `@openai/codex` version."
-    default: "0.159.1"
+    description: "`@openai/codex` version to install: a pinned version (reproducible, the default) or `latest`."
+    default: "0.159.2"
 
 outputs:
   findings-count:

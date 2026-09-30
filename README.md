@@ -330,7 +330,7 @@ The workflow mints an app token with `actions/create-github-app-token` and passe
 | `pricing` | built-in table | JSON override, per 1M tokens: `{"my-model": [input, cached-input, output]}` |
 | `sandbox` | `read-only` | Codex sandbox for commands it runs while reviewing |
 | `codex-config` | | Extra raw TOML for Codex's `config.toml` |
-| `codex-version` | `0.159.1` | Pinned Codex CLI version |
+| `codex-version` | `0.159.2` | Codex CLI version to install: a pinned version for reproducible reviews, or `latest` |
 
 ## Outputs
 
