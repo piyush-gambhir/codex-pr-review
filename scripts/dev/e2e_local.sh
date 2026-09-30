@@ -24,22 +24,16 @@ pr="${2:?usage: e2e_local.sh <owner/repo> <pr-number>}"
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 dev="$root/.dev"
-codex_version="${CODEX_VERSION:-$(sed -n 's/^    default: "\([0-9.]*\)"$/\1/p' "$root/action.yml" | tail -1)}"
+# The default of the codex-version input in action.yml.
+codex_version="${CODEX_VERSION:-$(awk '/^  codex-version:/{f=1} f && /^    default:/{gsub(/"/, "", $2); print $2; exit}' "$root/action.yml")}"
 mkdir -p "$dev"
 
-# Codex CLI, cached per version. npm skips the platform binary when install
-# scripts are off, so install it explicitly.
+# Codex CLI, cached per version, installed with pnpm like action.yml does
+# (install scripts off; the platform binary comes from optional dependencies).
 cli="$dev/codex-cli-$codex_version"
 if [ ! -x "$cli/node_modules/.bin/codex" ]; then
-  case "$(uname -s)-$(uname -m)" in
-    Darwin-arm64) platform=darwin-arm64 ;;
-    Darwin-x86_64) platform=darwin-x64 ;;
-    Linux-x86_64) platform=linux-x64 ;;
-    Linux-aarch64) platform=linux-arm64 ;;
-    *) echo "unsupported platform" >&2; exit 1 ;;
-  esac
-  npm install --silent --prefix "$cli" --no-audit --no-fund \
-    "@openai/codex@$codex_version" "@openai/codex-$platform@npm:@openai/codex@$codex_version-$platform"
+  mkdir -p "$cli"
+  pnpm --dir "$cli" add --silent --ignore-scripts "@openai/codex@$codex_version"
 fi
 codex="$cli/node_modules/.bin/codex"
 

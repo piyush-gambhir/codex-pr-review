@@ -1,7 +1,16 @@
-# actionlint does not know the `job.workflow_*` contexts yet (they name the
-# workflow file defining the running job, which is how the reusable workflow
-# finds its own repository and ref). Drop just those errors.
+# Narrow ignores for things actionlint's bundled metadata doesn't know yet.
+#
+# - `job.workflow_*` contexts name the workflow file defining the running job,
+#   which is how the reusable workflow finds its own repository and ref.
+# - actions/create-github-app-token v3 takes `client-id` (with `app-id`
+#   deprecated and optional); actionlint still describes the v2 inputs.
 paths:
   .github/workflows/review.yml:
     ignore:
       - 'property "workflow_(repository|sha)" is not defined in object type'
+      - 'input "client-id" is not defined in action "actions/create-github-app-token@v3"'
+      - 'missing input "app-id" which is required by action "actions/create-github-app-token@v3"'
+  examples/codex-review-standalone.yml:
+    ignore:
+      - 'input "client-id" is not defined in action "actions/create-github-app-token@v3"'
+      - 'missing input "app-id" which is required by action "actions/create-github-app-token@v3"'

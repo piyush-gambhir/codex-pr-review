@@ -121,8 +121,14 @@ inputs:
     description: "Extra raw TOML appended to the generated Codex config.toml (top-level keys or tables)."
     default: ""
   codex-version:
-    description: "`@openai/codex` version to install: a pinned version (reproducible, the default) or `latest`."
+    description: "`@openai/codex` version to install: a pinned version (reproducible, the default) or `latest` (newest release that has passed pnpm's minimum release age)."
     default: "0.159.2"
+  node-version:
+    description: "Node.js version to set up for installing and running Codex (`actions/setup-node`). Empty uses the runner's Node as is."
+    default: lts/*
+  pnpm-version:
+    description: "pnpm version to set up (`pnpm/action-setup`) for installing Codex."
+    default: "12"
 
 outputs:
   findings-count:
@@ -290,8 +296,21 @@ runs:
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/checks.py" start
 
+    - name: Set up Node.js
+      if: steps.guard.outputs.skip != 'true' && inputs.node-version != ''
+      uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Set up pnpm
+      if: steps.guard.outputs.skip != 'true'
+      uses: pnpm/action-setup@v6
+      with:
+        version: ${{ inputs.pnpm-version }}
+
     # Installed into RUNNER_TEMP with install scripts disabled, so nothing from
-    # the pull request can influence the reviewer binary.
+    # the pull request can influence the reviewer binary. pnpm installs the
+    # platform binary through Codex's optional dependencies.
     - name: Install Codex CLI
       if: steps.guard.outputs.skip != 'true'
       shell: bash
@@ -299,8 +318,8 @@ runs:
       env:
         CODEX_VERSION: ${{ inputs.codex-version }}
       run: |
-        npm install --prefix "$RUNNER_TEMP/codex-cli" \
-          --ignore-scripts --no-audit --no-fund \
+        mkdir -p "$RUNNER_TEMP/codex-cli"
+        pnpm --dir "$RUNNER_TEMP/codex-cli" add --ignore-scripts \
           --registry=https://registry.npmjs.org/ \
           "@openai/codex@$CODEX_VERSION"
         "$RUNNER_TEMP/codex-cli/node_modules/.bin/codex" --version

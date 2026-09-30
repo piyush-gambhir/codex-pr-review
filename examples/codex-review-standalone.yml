@@ -18,7 +18,7 @@ name: Codex PR Review
 # CODEX_REVIEW_EFFORT (medium).
 #
 # Optional: post as your own bot (name and avatar) instead of github-actions,
-# using a GitHub App (see README). Set repository variable CODEX_REVIEW_APP_ID
+# using a GitHub App (see README). Set repository variable CODEX_REVIEW_APP_CLIENT_ID
 # and secret CODEX_REVIEW_APP_PRIVATE_KEY; without them GITHUB_TOKEN is used.
 #
 # Credentials:
@@ -54,7 +54,7 @@ jobs:
     steps:
       - name: Parse the request and check the PR
         id: check
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           BASE_BRANCH: ${{ env.BASE_BRANCH }}
           DEFAULT_PROVIDER: ${{ vars.CODEX_REVIEW_PROVIDER || 'openai' }}
@@ -141,10 +141,10 @@ jobs:
     steps:
       - name: Mint GitHub App token (optional custom bot identity)
         id: app
-        if: vars.CODEX_REVIEW_APP_ID != ''
-        uses: actions/create-github-app-token@v2
+        if: vars.CODEX_REVIEW_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ vars.CODEX_REVIEW_APP_ID }}
+          client-id: ${{ vars.CODEX_REVIEW_APP_CLIENT_ID }}
           private-key: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
           permission-pull-requests: write
           permission-issues: write
@@ -152,7 +152,7 @@ jobs:
       # Review guidelines come from the default branch, so a PR can't rewrite
       # the rules it is reviewed against.
       - name: Checkout review guidelines from the default branch
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           path: trusted
           sparse-checkout: .github/codex-review.md
@@ -160,7 +160,7 @@ jobs:
           persist-credentials: false
 
       - name: Checkout PR head
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.gate.outputs.head-sha }}
           path: pr

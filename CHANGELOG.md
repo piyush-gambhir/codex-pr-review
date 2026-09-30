@@ -2,6 +2,14 @@
 
 This project follows [semantic versioning](https://semver.org). The `v1` tag always points to the latest 1.x release; breaking input or output changes get a new major version.
 
+## v1.2.0 (2026-09-30)
+
+### Changed
+
+- Codex is installed with **pnpm** (`pnpm/action-setup@v6`) on the latest **Node.js LTS** (`actions/setup-node@v7`). New inputs `node-version` (default `lts/*`, empty keeps the runner's Node) and `pnpm-version` (default `12`). With `codex-version: latest`, pnpm resolves the newest release older than its minimum release age.
+- Workflows and examples use the latest actions: `actions/checkout@v7`, `actions/github-script@v9`, `actions/create-github-app-token@v3`.
+- GitHub App identity now uses the app's client ID (`create-github-app-token` v3 deprecated `app-id`): variable `CODEX_REVIEW_APP_CLIENT_ID`, and the reusable workflow input `app-id` is now `app-client-id`.
+
 ## v1.1.1 (2026-09-30)
 
 ### Changed

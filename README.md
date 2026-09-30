@@ -115,7 +115,7 @@ Everything is optional. `base-branches` defaults to your repository's default br
 | `guidelines-path` | `.github/codex-review.md` | Guidelines file, read from your default branch; empty loads none |
 | `max-priority` | `P3` | Lowest priority to report |
 | `fail-on-priority` | | Fail the review when a finding at this priority or higher is reported |
-| `app-id` | | GitHub App ID, to post under your own bot name and avatar |
+| `app-client-id` | | GitHub App client ID, to post under your own bot name and avatar |
 
 Secrets (`secrets: inherit` passes whichever you have): `OPENAI_API_KEY`, `AWS_ROLE_TO_ASSUME`, `CODEX_REVIEW_APP_PRIVATE_KEY`, and `ACTION_REPO_TOKEN` only if you run a private copy of this repository.
 
@@ -257,8 +257,8 @@ By default reviews are posted by `github-actions`. To post under your own name a
 1. Create a GitHub App (Settings → Developer settings → GitHub Apps → New). Name it what you want the bot to be called, for example `Acme Code Review`. Disable the webhook. Repository permissions: **Pull requests: read and write**, **Issues: read and write**.
 2. Upload a logo. [`assets/icon.png`](assets/icon.png) is free to use, or bring your own.
 3. Install the app on your repository, and generate a private key.
-4. Add the repository variable `CODEX_REVIEW_APP_ID` (the app ID) and the secret `CODEX_REVIEW_APP_PRIVATE_KEY` (the `.pem` contents).
-5. Pass the ID to the reusable workflow: `with: { app-id: "${{ vars.CODEX_REVIEW_APP_ID }}" }`.
+4. Add the repository variable `CODEX_REVIEW_APP_CLIENT_ID` (the app's **Client ID**, shown on its settings page) and the secret `CODEX_REVIEW_APP_PRIVATE_KEY` (the `.pem` contents).
+5. Pass the client ID to the reusable workflow: `with: { app-client-id: "${{ vars.CODEX_REVIEW_APP_CLIENT_ID }}" }`.
 
 The workflow mints an app token with `actions/create-github-app-token` and passes it as `github-token`. Reviews then appear as `your-app-name[bot]` with your logo. Please don't use OpenAI's or Codex's name or logo for your app, so readers don't mistake it for an official product.
 
@@ -330,7 +330,9 @@ The workflow mints an app token with `actions/create-github-app-token` and passe
 | `pricing` | built-in table | JSON override, per 1M tokens: `{"my-model": [input, cached-input, output]}` |
 | `sandbox` | `read-only` | Codex sandbox for commands it runs while reviewing |
 | `codex-config` | | Extra raw TOML for Codex's `config.toml` |
-| `codex-version` | `0.159.2` | Codex CLI version to install: a pinned version for reproducible reviews, or `latest` |
+| `codex-version` | `0.159.2` | Codex CLI version to install: a pinned version for reproducible reviews, or `latest` (the newest release older than pnpm's minimum release age, a supply-chain safety delay) |
+| `node-version` | `lts/*` | Node.js set up with `actions/setup-node` for installing and running Codex; empty keeps the runner's Node |
+| `pnpm-version` | `12` | pnpm set up with `pnpm/action-setup` to install Codex |
 
 ## Outputs
 
@@ -377,7 +379,7 @@ pricing: '{"my-fine-tune": [2, 0.2, 10]}'
 1. **Size guard**: [`scripts/filters.py`](scripts/filters.py) counts the changed lines between the merge base and HEAD. Over `max-changed-lines` with `large-pr: skip`, a note goes up and the remaining steps are skipped.
 2. **Progress note**: posted on the PR with a link to the run.
 3. **Previous review**: [`scripts/history.py`](scripts/history.py) reads the state marker in the last Codex review on the PR, and with `incremental` checks whether that commit is still an ancestor of the head.
-4. **Install**: the pinned Codex CLI goes into `RUNNER_TEMP` with npm install scripts disabled.
+4. **Install**: Node.js (latest LTS) and pnpm are set up, and the pinned Codex CLI is installed with pnpm into `RUNNER_TEMP` with install scripts disabled.
 5. **Credentials**: for `bedrock`, `aws-actions/configure-aws-credentials` assumes the role via OIDC and returns credentials as step outputs. For `openai`, the key is passed as `CODEX_API_KEY`. Only the review step receives them, and no GitHub token reaches Codex.
 6. **Config**: [`scripts/write_config.py`](scripts/write_config.py) writes Codex's `config.toml`: provider, model, effort, a read-only sandbox, no approvals, your guidelines, and a minimal environment (`shell_environment_policy.inherit = "core"`) so commands Codex runs never see the credentials.
 7. **Review**: `codex exec review --base <base-ref>` reviews the diff against the merge base.

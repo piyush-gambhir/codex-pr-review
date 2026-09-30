@@ -12,7 +12,7 @@ jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: action.yml and trigger/action.yml are valid
         run: |
           python3 - <<'PY'
@@ -30,3 +30,38 @@ jobs:
         run: |
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
           ./actionlint -color examples/*.yml .github/workflows/*.yml
+
+  # Runs the action for real up to the model call: size guard, Node and pnpm
+  # setup, the Codex install and config. A dummy key makes the review itself
+  # fail, which is expected; the checks below prove everything before it works
+  # on a real runner.
+  action-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Run the action with a dummy key
+        id: smoke
+        continue-on-error: true
+        uses: ./
+        with:
+          provider: openai
+          openai-api-key: not-a-real-key
+          base-ref: origin/main
+          pr-number: "0"
+          head-sha: ${{ github.sha }}
+          post-mode: none
+      - name: Check the install and the expected failure
+        env:
+          OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          set -eu
+          codex="$RUNNER_TEMP/codex-cli/node_modules/.bin/codex"
+          "$codex" --version
+          node --version
+          pnpm --version
+          test -f "$RUNNER_TEMP/codex-home/config.toml"
+          grep -q '^model_provider = "openai"' "$RUNNER_TEMP/codex-home/config.toml"
+          test "$OUTCOME" = failure || { echo "expected the dummy key to fail the review, got $OUTCOME"; exit 1; }
+          grep -qi "401\|unauthorized\|api key" "$RUNNER_TEMP/codex-review-events.jsonl"

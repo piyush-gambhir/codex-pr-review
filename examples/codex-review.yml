@@ -52,5 +52,5 @@ jobs:
       # default-effort: medium
       # max-priority: P3
       # fail-on-priority: P1   # uncomment to fail the check on P0/P1 findings
-      # app-id: ${{ vars.CODEX_REVIEW_APP_ID }}   # post as your own bot
+      # app-client-id: ${{ vars.CODEX_REVIEW_APP_CLIENT_ID }}   # post as your own bot
     secrets: inherit
