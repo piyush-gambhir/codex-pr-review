@@ -34,6 +34,7 @@ import filters  # noqa: E402
 import history  # noqa: E402
 import icons as icon_set  # noqa: E402
 import suggestions  # noqa: E402
+import verdict as verdicts  # noqa: E402
 
 API = os.environ.get("GITHUB_API_URL", "https://api.github.com")
 GRAPHQL = os.environ.get("GITHUB_GRAPHQL_URL", "https://api.github.com/graphql")
@@ -42,7 +43,9 @@ MARKER = "<!-- codex-pr-review -->"
 MARKER_PREFIX = "<!-- codex-pr-review"
 # GitHub's own alert blocks carry the verdict: it draws the octicon, the colour
 # and the border, so the headline looks like the rest of the pull request page.
-# The type is the worst priority reported, TIP when there is nothing to report.
+# With a merge verdict the type comes from that (see scripts/verdict.py); the
+# fallback below, the worst priority reported, is what a caller with no verdict
+# in hand gets (TIP when there is nothing to report).
 VERDICT_ALERT = {0: "CAUTION", 1: "CAUTION", 2: "WARNING", 3: "NOTE"}
 CLEAN_ALERT = "TIP"
 # Tolerates text before the tag ("- Security [P1] ...") and a relative or
@@ -252,6 +255,8 @@ class Context:
         self.still_open: set[str] = set()
         self.state = ""
         self.incremental = False
+        # The merge verdict, health score and confidence (scripts/verdict.py).
+        self.health = None
 
     def commit_link(self) -> str:
         short = self.head_sha[:7]
@@ -310,16 +315,41 @@ def priority_counts(findings: list[dict]) -> str:
     )
 
 
-def verdict(findings: list[dict], resolved: int = 0) -> str:
-    """The headline as an alert block: type from the worst priority reported."""
-    fixed = f" \u00b7 {resolved} resolved" if resolved else ""
+def what_was_found(findings: list[dict], resolved: int = 0, carried: int = 0, bold: bool = True) -> str:
+    """"2 issues to address (1 P1, 1 P2) . 3 resolved": the count line."""
+    also = f" \u00b7 {resolved} resolved" if resolved else ""
+    if carried:
+        also += f" \u00b7 {plural(carried, 'finding')} still open from the last review"
     if not findings:
-        return alert(CLEAN_ALERT, f"**No issues found.**{fixed}")
-    worst = min(f["priority"] for f in findings)
-    scale = "issue" if worst <= 1 else "minor issue"
-    verb = " to address" if worst <= 1 else ""
-    headline = f"**{plural(len(findings), scale)}{verb}** ({priority_counts(findings)}){fixed}"
-    return alert(VERDICT_ALERT.get(worst, "NOTE"), headline)
+        text = "No issues found."
+    else:
+        worst = min(f["priority"] for f in findings)
+        scale = "issue" if worst <= 1 else "minor issue"
+        verb = " to address" if worst <= 1 else ""
+        text = f"{plural(len(findings), scale)}{verb}"
+    body = f"**{text}**" if bold else text
+    if findings:
+        body += f" ({priority_counts(findings)})"
+    return body + also
+
+
+def verdict(findings: list[dict], resolved: int = 0, health=None, carried: int = 0) -> str:
+    """The headline as an alert block.
+
+    With a merge verdict it leads: "Changes requested . Health 55/100 .
+    Confidence: low (...)", then what was found, then anything the confidence
+    makes it necessary to say. Without one (a caller that has no verdict in
+    hand) it is the old headline, typed by the worst priority reported.
+    """
+    if health is None:
+        found = what_was_found(findings, resolved, carried)
+        worst = min((f["priority"] for f in findings), default=None)
+        return alert(CLEAN_ALERT if worst is None else VERDICT_ALERT.get(worst, "NOTE"), found)
+    found = what_was_found(findings, resolved, carried, bold=False)
+    if health.trend:
+        found += f" \u00b7 {health.trend[0].upper()}{health.trend[1:]}"
+    blocks = [verdicts.line(health), found] + ([health.note] if health.note else [])
+    return alert(health.alert, "\n\n".join(blocks))
 
 
 def suggestion_block(finding: dict, exact_range: bool = True, native: bool = True) -> str:
@@ -393,7 +423,11 @@ def issues_table(findings: list[dict], ctx: Context, inline_ids: set[int] | None
 def body_markdown(summary: str, findings: list[dict], ctx: Context, inline_ids: set[int] | None = None) -> str:
     """Verdict, summary, the full issues table, collapsible details, then meta and next steps."""
     inline_ids = inline_ids or set()
-    parts = [MARKER, f"## {ctx.title}", verdict(findings, len(ctx.resolved)), summary]
+    parts = [MARKER, f"## {ctx.title}",
+             verdict(findings, len(ctx.resolved), ctx.health, len(ctx.carried))]
+    if ctx.health is not None:
+        parts.append(verdicts.breakdown(ctx.health))
+    parts.append(summary)
     if findings:
         # With nothing inline (comment mode, or an inline review GitHub rejected)
         # every row would say the same thing, so the column is left out.
@@ -415,7 +449,8 @@ def set_output(key: str, value: str) -> None:
             out.write(f"{key}={value}\n")
 
 
-def write_outputs(findings: list[dict], filtered_out: int, resolved: int = 0, path_filtered_out: int = 0) -> None:
+def write_outputs(findings: list[dict], filtered_out: int, resolved: int = 0, path_filtered_out: int = 0,
+                  health=None) -> None:
     findings_file = pathlib.Path(os.environ.get("RUNNER_TEMP", ".")) / "codex-review-findings.json"
     findings_file.write_text(json.dumps(findings, indent=2), encoding="utf-8")
     highest = f"P{min(f['priority'] for f in findings)}" if findings else ""
@@ -427,8 +462,22 @@ def write_outputs(findings: list[dict], filtered_out: int, resolved: int = 0, pa
         "resolved-count": str(resolved),
         "path-filtered-count": str(path_filtered_out),
     }
+    if health is not None:
+        outputs.update({
+            "verdict": health.verdict,
+            "health-score": str(health.score),
+            "confidence": health.confidence,
+            "health-trend": "" if health.delta is None else "%+d" % health.delta,
+        })
     for key, value in outputs.items():
         set_output(key, value)
+
+
+def write_health_file(health) -> None:
+    """Hand the verdict to the steps after this one, such as the check run."""
+    path = os.environ.get("HEALTH_FILE", "").strip()
+    if path and health is not None:
+        pathlib.Path(path).write_text(json.dumps(health.as_dict()), encoding="utf-8")
 
 
 def write_summary_file(summary: str) -> None:
@@ -464,6 +513,7 @@ def main() -> int:
     ctx = Context(dict(env))
     max_priority = parse_priority(env.get("MAX_PRIORITY", ""), 3)
     fail_on = parse_priority(env.get("FAIL_ON_PRIORITY", ""), None)
+    fail_on_verdict = verdicts.parse_threshold(env.get("FAIL_ON_VERDICT", ""))
 
     paths = filters.PathFilter.from_env(dict(env))
     native_suggestions = env.get("SUGGESTIONS", "true").strip().lower() != "false"
@@ -496,12 +546,29 @@ def main() -> int:
     ctx.resolved, ctx.carried, ctx.still_open = history.classify(
         previous.get("findings") or [], findings, plan.get("changed-files")
     )
-    ctx.state = history.state_marker(ctx.head_sha, findings, ctx.carried, history.settings_digest(dict(env)))
     if previous:
         print(f"Since {history.short(ctx.previous_sha)}: {len(ctx.resolved)} resolved, "
               f"{len(ctx.still_open)} still open, {len(ctx.carried)} not re-checked.")
 
-    write_outputs(findings, filtered_out, len(ctx.resolved), path_filtered_out)
+    # Should this be merged? Rule-based, from everything the run can see: the
+    # findings still open, what the pull request itself says, and how much of it
+    # this review actually covered.
+    ctx.health = verdicts.assess(
+        findings,
+        ctx.carried,
+        plan.get("signals"),
+        verdicts.read_coverage(env.get("COVERAGE_FILE", "")),
+        int((env.get("CHANGED_LINES") or "0").strip() or 0),
+        filters.parse_limit(env.get("MAX_CHANGED_LINES", "")),
+        ctx.incremental,
+        previous,
+    )
+    print("Verdict: " + verdicts.plain_line(ctx.health) + (f" \u00b7 {ctx.health.trend}" if ctx.health.trend else ""))
+    ctx.state = history.state_marker(ctx.head_sha, findings, ctx.carried,
+                                     history.settings_digest(dict(env)), ctx.health)
+
+    write_outputs(findings, filtered_out, len(ctx.resolved), path_filtered_out, ctx.health)
+    write_health_file(ctx.health)
     write_summary_file(summary)
     write_summary(summary, findings, ctx)
 
@@ -513,21 +580,29 @@ def main() -> int:
             github("POST", f"/repos/{repo}/issues/{pr}/comments", token, {"body": body_markdown(summary, findings, ctx)})
             print(f"Posted comment with {plural(len(findings), 'finding')}.")
         else:
-            post_review(repo, pr, token, summary, findings, ctx, native_suggestions)
+            post_review(repo, pr, token, summary, findings, ctx, native_suggestions,
+                        verdicts.parse_event(env.get("REVIEW_EVENT", ""), ctx.health))
         set_output("posted", "true")
         if ctx.resolved and env.get("RESOLVE_FIXED_THREADS", "true").strip().lower() == "true":
             fixed = {item["fp"] for item in ctx.resolved}
             threads = plan.get("threads")  # read with the state above, so not listed again
             print(f"Resolved {history.resolve_threads(repo, pr, token, fixed, github, GRAPHQL, threads)} fixed thread(s).")
+        if env.get("LABELS", "true").strip().lower() != "false":
+            set_output("label", verdicts.apply_labels(repo, pr, token, ctx.health.verdict, github))
 
+    failed = False
     if fail_on is not None and findings and min(f["priority"] for f in findings) <= fail_on:
         print(f"::error::Codex found P{min(f['priority'] for f in findings)} issues (fail-on-priority is P{fail_on}).")
-        return 1
-    return 0
+        failed = True
+    if verdicts.fails(ctx.health, fail_on_verdict):
+        print(f"::error::The merge verdict is `{ctx.health.verdict}` "
+              f"(fail-on-verdict is `{fail_on_verdict}`).")
+        failed = True
+    return 1 if failed else 0
 
 
 def post_review(repo: str, pr: str, token: str, summary: str, findings: list[dict], ctx: Context,
-                native_suggestions: bool = True) -> None:
+                native_suggestions: bool = True, event: str = "COMMENT") -> None:
     """One review: verdict and full issues table in the body, inline comments on diff lines."""
     allowed = commentable_lines(repo, pr, token)
     inline = [f for f in findings if f["end"] in allowed.get(f["path"], set())]
@@ -546,20 +621,31 @@ def post_review(repo: str, pr: str, token: str, summary: str, findings: list[dic
 
     payload = {
         "commit_id": ctx.head_sha,
-        "event": "COMMENT",
+        "event": event,
         "body": body_markdown(summary, findings, ctx, {id(f) for f in inline}),
         "comments": comments,
     }
-    try:
-        github("POST", f"/repos/{repo}/pulls/{pr}/reviews", token, payload)
-    except urllib.error.HTTPError as error:
-        # A line GitHub won't anchor to rejects the whole review: fall back to
-        # full details in the body rather than losing the findings.
-        print(f"::warning::Inline review rejected ({error.code}: {error.read().decode()[:300]}); posting findings in the body.")
-        payload.update(body=body_markdown(summary, findings, ctx), comments=[])
-        github("POST", f"/repos/{repo}/pulls/{pr}/reviews", token, payload)
-        inline = []
-    print(f"Posted review: {plural(len(findings), 'issue')}, {len(inline)} inline.")
+    # Two things GitHub can refuse: the review event (a repository may not let
+    # the Actions identity request changes, and nobody may request changes on
+    # their own pull request), and a line it will not anchor a comment to. Each
+    # is given up in turn rather than losing the review.
+    # Each pair is (what to send, what the next attempt gives up to get it posted).
+    attempts = [] if event == "COMMENT" else [(payload, "requesting changes")]
+    attempts.append((dict(payload, event="COMMENT"), "the inline anchors"))
+    attempts.append((dict(payload, event="COMMENT", body=body_markdown(summary, findings, ctx),
+                          comments=[]), ""))
+    for index, (body, next_up) in enumerate(attempts):
+        try:
+            github("POST", f"/repos/{repo}/pulls/{pr}/reviews", token, body)
+            print(f"Posted review ({body['event']}): {plural(len(findings), 'issue')}, "
+                  f"{len(body['comments'])} inline.")
+            return
+        except urllib.error.HTTPError as error:
+            if index == len(attempts) - 1:
+                raise
+            detail = error.read().decode("utf-8", "replace")[:300]
+            print(f"::warning::GitHub rejected the review ({error.code}: {detail}); "
+                  f"giving up {next_up} and posting it again.")
 
 
 if __name__ == "__main__":

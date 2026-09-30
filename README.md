@@ -15,8 +15,22 @@ Comment `@gpt review` on a pull request. About a minute later you get a review w
 
 No emoji anywhere: the verdict is a GitHub alert block, which GitHub renders with its own icon, colour and border, and the markers are 16px [Octicons](icons/) served over a CDN. This is the review body, rendered exactly as it is posted:
 
-> [!CAUTION]
-> **5 issues to address** (4 P1, 1 P2) · 2 resolved
+> [!WARNING]
+> **Changes requested** · Health 70/100 · Confidence: high (one pass over the whole diff, 214 changed lines)
+>
+> 5 issues to address (4 P1, 1 P2) · 2 resolved · Health 45 -> 70 (+25 since last review)
+
+<details>
+<summary><b>Why this score</b></summary>
+
+| Signal | Effect |
+|---|---|
+| Starting score | 100 |
+| 4 P1 findings (capped) | -60 |
+| 1 P2 finding | -5 |
+| **Health** | **70 / 100** |
+
+</details>
 
 The patch introduces five correctness issues, including incorrect discounts and non-integer monetary results.
 
@@ -36,7 +50,7 @@ The patch introduces five correctness issues, including incorrect discounts and 
 <sub>Reviewed `314c52a` against `main` · `gpt-6.1-sol` via OpenAI API · medium effort · 36,615 input (29,312 cached) + 926 output tokens · ~$0.03 · View run</sub><br>
 <sub>Re-run: `@gpt review` · deeper: `@gpt review high` · on Bedrock: `@gpt review bedrock`</sub>
 
-- **Verdict first**, as the alert block GitHub already uses on its own pages: `CAUTION` when anything is P0 or P1, `WARNING` for P2, `NOTE` for P3 only, `TIP` when the diff is clean, with the count per priority and how many findings are gone since the last review.
+- **Should this be merged?** first, as the alert block GitHub already uses on its own pages: **Ready to merge**, **Mergeable, with nits**, **Changes requested** or **Do not merge**, with a health score out of 100, how much of the pull request the review actually covered, and the score's trend since the last review. It is advisory: it sits alongside your CI and a human approval, never instead of them. See [Merge verdict and health](#merge-verdict-and-health).
 - **Issues table**: every finding with its priority (P0 to P3, a different glyph each), a `file:lines` link pinned to the reviewed commit, and whether it was commented on inline or written up in the body.
 - **Suggested fixes**: when a fix is a small replacement of the flagged lines, it arrives as a committable GitHub suggestion, marked <img src="icons/suggestion.svg" width="16" height="16" alt="Suggested fix"> in the table. Anywhere the comment can't be anchored to exactly those lines it becomes a plain "Suggested fix" code block instead, so a fix is never applied to the wrong place.
 - **Inline comments** on the exact diff lines (including multi-line ranges); findings outside the diff appear as collapsible details, so nothing is lost.
@@ -67,7 +81,7 @@ The patch introduces five correctness issues, including incorrect discounts and 
        permissions:
          contents: read
          pull-requests: write # post the review, react and reply
-         issues: write # react to the requesting comment
+         issues: write # react to the requesting comment, label the PR
          id-token: write # AWS OIDC, for the bedrock provider
        uses: piyush-gambhir/codex-pr-review/.github/workflows/review.yml@v1
        with:
@@ -123,6 +137,9 @@ Everything is optional. `base-branches` defaults to your repository's default br
 | `guidelines-path` | `.github/codex-review.md` | Guidelines file, read from your default branch; empty loads none |
 | `max-priority` | `P3` | Lowest priority to report |
 | `fail-on-priority` | | Fail the review when a finding at this priority or higher is reported |
+| `fail-on-verdict` | | Fail the review when the merge verdict is this or worse |
+| `labels` | `true` | Label the PR with the merge verdict |
+| `review-event` | `COMMENT` | `COMMENT`, `REQUEST_CHANGES` or `auto` |
 | `icons` | `true` | Show the icon images; `false` renders every layout as text only |
 | `icon-base-url` | jsDelivr | Base URL the icon images are loaded from |
 | `app-client-id` | | GitHub App client ID, to post under your own bot name and avatar |
@@ -159,17 +176,68 @@ Guidelines are good for:
 
 You can also pass rules inline with `review-instructions`.
 
+### Merge verdict and health
+
+Every review answers one question first: **should this be merged?** The answer is a verdict, a health score out of 100 and a confidence level, and all three are computed in the action ([`scripts/verdict.py`](scripts/verdict.py)) rather than asked of the model: Codex's own `overall_correctness` and `overall_confidence_score` fields come back empty on the versions this action pins, and a rule you can read is worth more than a number you cannot check.
+
+It is **advisory**. It is a reading of what this review found, not a merge decision: keep it alongside your test suite, your own required checks and a human approval, not instead of them. What it is good for is triage, a trend over the life of a pull request, and a label you can filter a queue by.
+
+**The verdict** follows the worst finding still open:
+
+| Verdict | When | Alert | Label |
+|---|---|---|---|
+| `ready` | **Ready to merge**, nothing open | `TIP` | `codex: ready` |
+| `nits` | **Mergeable, with nits**, only P2 and P3 | `NOTE` | `codex: nits` |
+| `changes-requested` | **Changes requested**, at least one P1 | `WARNING` | `codex: changes-requested` |
+| `blocked` | **Do not merge**, at least one P0 | `CAUTION` | `codex: blocked` |
+
+"Still open" means the findings this review reported **plus** the ones the last review reported that this pass did not re-check, because their file did not change or because an [incremental](#re-reviews) pass never looked at them. A finding is open until something says it is fixed, so a re-review that touches one file cannot say "ready to merge" while a P0 sits untouched in another.
+
+**The health score** starts at 100 and comes down:
+
+| | Per finding | At most |
+|---|---|---|
+| P0 | -40 | -80 |
+| P1 | -20 | -60 |
+| P2 | -5 | -15 |
+| P3 | -1 | -5 |
+
+The caps are the point: every nit in the world costs at most 20, which is exactly one P1, so a pile of style notes can never score worse than one real bug. Three signals from the pull request itself come off as well, read with the run's single GraphQL call: **failing checks** -10 (only a rollup that actually failed; at the time the action reads the pull request its own workflow is still pending, so pending never counts), **merge conflicts** -10 (`mergeable == CONFLICTING`), **draft** -5. The score is clamped to 0 and rendered with a collapsed **Why this score** block listing every row, so nothing about it is a black box.
+
+The score is stored in the review's state marker, so the next review shows the trend: `Health 45 -> 70 (+25 since last review)`, and the `health-trend` output is the signed change (`+25`).
+
+**The confidence** says how much of the pull request the review actually covered, and it is the honest part of the answer:
+
+| | When |
+|---|---|
+| `high` | a coverage report says every changed file was inspected; or, with no report, one pass over a diff inside `max-changed-lines` (or under 2000 changed lines when no limit is set) |
+| `medium` | a coverage report with files left out but at least 80% inspected; an `incremental` pass, which only read the new commits; or a diff at 75% of `max-changed-lines` or more |
+| `low` | a coverage report with less than 80% of the files inspected; or a diff over `max-changed-lines` reviewed anyway with `large-pr: warn` |
+
+A coverage report (the `COVERAGE_FILE` a full-coverage pass writes) always wins over the size guard. **Low confidence caps the verdict**: a clean or nits-only result the run cannot stand behind is reported as `changes-requested` with the headline **Needs a full review** and a sentence saying why, rather than as ready or mergeable. The health score is not capped, because it grades the code that was read while the confidence grades the reading, which is why you can see `Needs a full review · Health 100/100 · Confidence: low`.
+
+**Where it shows up:**
+
+- the top of the review body, the single comment (`post-mode: comment`), the job summary and the check run summary;
+- the pull request's labels, one of the four above, with the other three removed. `labels: false` turns it off. Creating a label needs `issues: write`; without it the action warns once and posts the review as usual;
+- the check run's conclusion, when `check-run: true` (see [Checks and code scanning](#checks-and-code-scanning));
+- the `verdict`, `health-score`, `confidence` and `health-trend` outputs;
+- the "already reviewed" note, which repeats the verdict the review it points at reached.
+
+**Requesting changes.** `review-event: auto` submits the review as `REQUEST_CHANGES` on a `changes-requested` or `blocked` verdict and as a comment otherwise; `review-event: REQUEST_CHANGES` always does. GitHub may refuse: a repository can stop the Actions identity requesting changes, and nobody may request changes on their own pull request. The action then posts the same review as a `COMMENT` and warns, so a review is never lost to the setting. `auto` never requests changes over a **Needs a full review** verdict, since nothing was actually found. The default is `COMMENT`.
+
 ### Filtering and gating
 
 - `max-priority: P1` reports only P0 and P1 findings; the number hidden is noted under the review.
 - `fail-on-priority: P1` fails the step when a P0 or P1 finding is reported. Make the check required if it should block merging. The review is still posted.
+- `fail-on-verdict: blocked` fails the step on a do-not-merge verdict; `changes-requested` fails on that too. Both gates work together, and both leave the review posted. Remember that a verdict counts carried-forward findings, so `fail-on-verdict` keeps failing until they are actually fixed.
 
 ### Re-reviews
 
 Every posted review carries a hidden state marker with the reviewed commit, a digest of the settings that produced it, and a fingerprint per finding (the path plus the meaningful words of the title, so it survives line shifts and small rewordings). The next review reads the most recent marker on the pull request and uses it to:
 
 - skip the review entirely when the commit and the settings are the same ones (see [Not paying twice](#not-paying-twice));
-- list what is gone under **Resolved since last review** (collapsed once it gets long) and count it in the verdict line, e.g. `2 issues to address (2 P1) · 3 resolved`;
+- list what is gone under **Resolved since last review** (collapsed once it gets long) and count it in the verdict line, e.g. `2 issues to address (2 P1) · 3 resolved`, along with the [health score's](#merge-verdict-and-health) trend;
 - tag findings reported again as **still open** in the issues table;
 - resolve the inline threads of fixed findings, so only live feedback is left open. Turn that off with `resolve-fixed-threads: false`.
 
@@ -294,10 +362,12 @@ Two optional outputs put the findings where GitHub already shows problems: a che
 
 | Conclusion | When |
 |---|---|
-| `success` | no findings |
-| `neutral` | findings, but none at or above `fail-on-priority` (or gating is off) |
-| `failure` | `fail-on-priority` tripped, or the review itself failed |
+| `success` | a `ready` or `nits` verdict the review is confident in |
+| `neutral` | any other verdict, or the same one at medium or low confidence |
+| `failure` | a `blocked` verdict, either gate tripped (`fail-on-priority`, `fail-on-verdict`), or the review itself failed |
 | `cancelled` | the job was cancelled |
+
+A partial review never turns the check green: `success` needs both a clean or nits-only [verdict](#merge-verdict-and-health) and `high` confidence.
 
 The output holds the verdict and the issues table, plus one annotation per finding: `failure` for P0 and P1, `warning` for P2, `notice` for P3. Annotations go up 50 at a time, as the API requires.
 
@@ -369,6 +439,7 @@ The workflow mints an app token with `actions/create-github-app-token` and passe
 | `review-instructions-file` | | Guidelines file, relative to the workspace |
 | `max-priority` | `P3` | Lowest priority to report |
 | `fail-on-priority` | | Fail the step when a finding at this priority or higher is reported |
+| `fail-on-verdict` | | Fail the step when the merge verdict is this or worse: `ready`, `nits`, `changes-requested`, `blocked` |
 | `resolve-fixed-threads` | `true` | Resolve the inline threads of findings no longer reported |
 | `incremental` | `false` | Review only the commits pushed since the last Codex review |
 | `skip-unchanged` | `true` | Skip the review when this commit already has one with the same settings |
@@ -376,6 +447,8 @@ The workflow mints an app token with `actions/create-github-app-token` and passe
 | **Output** | | |
 | `post-mode` | `review` | `review`, `comment` or `none` |
 | `hide-previous` | `true` | Collapse earlier Codex comments as outdated |
+| `labels` | `true` | Label the PR with the merge verdict (`codex: ready`, `codex: nits`, `codex: changes-requested`, `codex: blocked`); needs `issues: write` |
+| `review-event` | `COMMENT` | `COMMENT`, `REQUEST_CHANGES` or `auto` (request changes when the verdict asks for them) |
 | `status-comment` | `true` | Progress note while reviewing; becomes a failure note on errors |
 | `trigger-comment-id` | | Requesting comment; gets a rocket reaction on success and a confused one on failure |
 | `rerun-hint` | | Next-steps line under the review |
@@ -398,6 +471,10 @@ The workflow mints an app token with `actions/create-github-app-token` and passe
 
 | Output | Description |
 |---|---|
+| `verdict` | Should this be merged: `ready`, `nits`, `changes-requested` or `blocked` |
+| `health-score` | 0 to 100, from the open findings and the PR's own signals |
+| `confidence` | How much of the PR the review covered: `high`, `medium` or `low` |
+| `health-trend` | Change in the score since the last review, e.g. `+25`; empty with nothing to compare with |
 | `findings-count` | Findings reported (after `max-priority`) |
 | `highest-priority` | e.g. `P1`; empty when clean |
 | `filtered-count` | Findings hidden by `max-priority` |
@@ -448,7 +525,7 @@ pricing: '{"my-fine-tune": [2, 0.2, 10]}'
 7. **Config**: [`scripts/write_config.py`](scripts/write_config.py) writes Codex's `config.toml`: provider, model, effort, a read-only sandbox, no approvals, your guidelines, and a minimal environment (`shell_environment_policy.inherit = "core"`) so commands Codex runs never see the credentials.
 8. **Review**: `codex exec review --base <base-ref>` reviews the diff against the merge base.
 9. **Usage**: [`scripts/usage.py`](scripts/usage.py) reads the real token counts out of the session rollout Codex wrote in `CODEX_HOME` (review mode reports zero usage on its `turn.completed` event) and estimates the cost from the price table.
-10. **Publish**: [`scripts/publish_review.py`](scripts/publish_review.py) parses the findings and posts the review. If GitHub rejects an inline anchor, everything goes in the body instead. [`scripts/status.py`](scripts/status.py) then clears the progress note, or turns it into a failure note. A failed or empty review never looks like a pass. Fixed findings are listed as resolved and their threads are resolved, best effort.
+10. **Publish**: [`scripts/publish_review.py`](scripts/publish_review.py) parses the findings, works out the merge verdict, health score and confidence with [`scripts/verdict.py`](scripts/verdict.py), and posts the review. If GitHub rejects the review event or an inline anchor, each is given up in turn rather than losing the review. The pull request is labelled with the verdict. [`scripts/status.py`](scripts/status.py) then clears the progress note, or turns it into a failure note. A failed or empty review never looks like a pass. Fixed findings are listed as resolved and their threads are resolved, best effort.
 11. **Checks and SARIF** (optional): [`scripts/checks.py`](scripts/checks.py) completes the check run with the verdict and the annotations, and [`scripts/sarif.py`](scripts/sarif.py) turns the findings JSON into a SARIF 2.1.0 file. Neither can fail the review.
 
 ## Security
@@ -474,6 +551,7 @@ The tests cover:
 - config generation
 - token usage and cost, against a captured Codex session rollout
 - check run conclusions, annotation batching and summary truncation
+- the merge verdict at every confidence level, the score weights and their caps, the "why this score" breakdown, the trend read back from the state marker, the labels (added, the others removed, and a refused permission), `fail-on-verdict`, and `review-event` including both fallbacks
 - SARIF 2.1.0 structure
 - fingerprints, state round trips, resolved versus still-open classification (full and incremental) and thread matching
 - the icon set: URL resolution (an action tag, a commit SHA, a branch, a private copy), alert type selection, alt text and sizing, text-only mode, and that nothing the action renders or this repository ships contains an emoji codepoint

@@ -10,10 +10,11 @@
 #   GH_TOKEN=$(gh auth token --user <you>) scripts/dev/e2e_local.sh <owner/repo> <pr-number>
 #
 # Any environment variable the scripts read (MAX_PRIORITY, POST_MODE,
-# REVIEW_INSTRUCTIONS, FAIL_ON_PRIORITY, HIDE_PREVIOUS, SUGGESTIONS,
-# INCLUDE_PATHS, EXCLUDE_PATHS, MAX_CHANGED_LINES, LARGE_PR, ICONS,
-# ICON_BASE_URL, SKIP_UNCHANGED, FORCE, ...) can be set to override the defaults
-# below. DRY_RUN=1 skips everything that posts.
+# REVIEW_INSTRUCTIONS, FAIL_ON_PRIORITY, FAIL_ON_VERDICT, HIDE_PREVIOUS,
+# SUGGESTIONS, INCLUDE_PATHS, EXCLUDE_PATHS, MAX_CHANGED_LINES, LARGE_PR, ICONS,
+# ICON_BASE_URL, SKIP_UNCHANGED, FORCE, LABELS, REVIEW_EVENT, COVERAGE_FILE, ...)
+# can be set to override the defaults below. DRY_RUN=1 skips everything that
+# posts, labels included.
 #
 # Re-running it straight away posts the "already reviewed" note and calls no
 # model, the way the action does; FORCE=1 reviews the same commit again.
@@ -69,6 +70,13 @@ export SARIF_FILE="${SARIF_FILE:-$run/codex-review.sarif}" CODEX_VERSION="$codex
 export SUGGESTIONS="${SUGGESTIONS:-true}"
 export INCLUDE_PATHS="${INCLUDE_PATHS:-}" EXCLUDE_PATHS="${EXCLUDE_PATHS:-}"
 export MAX_CHANGED_LINES="${MAX_CHANGED_LINES:-}" LARGE_PR="${LARGE_PR:-warn}"
+# Merge verdict, health score and confidence. LABELS=false leaves the pull
+# request's labels alone; COVERAGE_FILE is written by a full-coverage pass, and
+# without it the size guard below decides the confidence.
+export LABELS="${LABELS:-true}" REVIEW_EVENT="${REVIEW_EVENT:-COMMENT}"
+export FAIL_ON_VERDICT="${FAIL_ON_VERDICT:-}"
+export HEALTH_FILE="$run/codex-review-health.json"
+export COVERAGE_FILE="${COVERAGE_FILE:-$run/codex-review-coverage.json}"
 # ICONS=false renders text only; ICON_BASE_URL points the images somewhere the
 # icons already exist, such as a pushed branch on the public repository.
 export ICONS="${ICONS:-true}" ICON_BASE_URL="${ICON_BASE_URL:-}"
@@ -87,6 +95,8 @@ output() { sed -n "s/^$1=//p" "$GITHUB_OUTPUT" | tail -1; }
 # Size guard, the same order action.yml runs it: before anything is posted.
 (cd "$checkout" && python3 "$root/scripts/filters.py")
 export SIZE_NOTE="$(sed -n 's/^note=//p' "$GITHUB_OUTPUT" | tail -1)"
+# What the confidence falls back to when no coverage report was written.
+export CHANGED_LINES="$(sed -n 's/^changed-lines=//p' "$GITHUB_OUTPUT" | tail -1)"
 if [ "$(sed -n 's/^skip=//p' "$GITHUB_OUTPUT" | tail -1)" = "true" ]; then
   echo "skipping the review: over max-changed-lines"
   CHANGED_LINES="$(sed -n 's/^changed-lines=//p' "$GITHUB_OUTPUT" | tail -1)" \

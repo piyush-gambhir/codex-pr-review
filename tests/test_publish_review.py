@@ -1,9 +1,11 @@
+import io
 import json
 import os
 import pathlib
 import sys
 import tempfile
 import unittest
+import urllib.error
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
@@ -351,6 +353,166 @@ class MainTest(unittest.TestCase):
         self.assertEqual(len(posts), 1)
         self.assertIn("2 issues to address", posts[0][3]["body"])
         self.assertIn("(click to expand)", posts[0][3]["body"])
+
+
+class MergeVerdictTest(unittest.TestCase):
+    """The verdict, health score and confidence in the body, the outputs and the gates."""
+
+    def setUp(self):
+        self.text = (FIXTURES / "review-two-findings.md").read_text()
+        self.clean = "No issues found in the changes."
+
+    def test_the_verdict_leads_the_body_with_the_score_and_confidence(self):
+        _, outputs, _, summary = run_publish(self.text)
+        self.assertIn("**Changes requested** · Health 75/100 · Confidence: high", summary)
+        self.assertIn("2 issues to address (1 P1, 1 P2)", summary)
+        self.assertIn("<summary><b>Why this score</b></summary>", summary)
+        self.assertIn("| 1 P1 finding | -20 |", summary)
+        self.assertEqual((outputs["verdict"], outputs["health-score"], outputs["confidence"]),
+                         ("changes-requested", "75", "high"))
+        self.assertEqual(outputs["health-trend"], "")
+
+    def test_a_clean_review_is_ready_to_merge(self):
+        _, outputs, _, summary = run_publish(self.clean)
+        self.assertIn("> [!TIP]", summary)
+        self.assertIn("**Ready to merge** · Health 100/100", summary)
+        self.assertEqual((outputs["verdict"], outputs["health-score"]), ("ready", "100"))
+
+    def test_a_low_confidence_clean_review_does_not_claim_mergeable(self):
+        _, outputs, _, summary = run_publish(self.clean, CHANGED_LINES="900", MAX_CHANGED_LINES="500")
+        self.assertIn("**Needs a full review**", summary)
+        self.assertIn("Confidence: low (one pass over 900 changed lines, over the 500 line limit)", summary)
+        self.assertIn("did not cover the whole pull request", summary)
+        self.assertEqual((outputs["verdict"], outputs["confidence"]), ("changes-requested", "low"))
+
+    def test_a_coverage_report_sets_the_confidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            coverage = pathlib.Path(tmp, "coverage.json")
+            coverage.write_text(json.dumps({"mode": "full", "complete": False, "files_total": 224,
+                                            "files_inspected": 38, "uncovered": [], "shards": 6,
+                                            "passes": 6}))
+            _, outputs, _, summary = run_publish(self.clean, COVERAGE_FILE=str(coverage),
+                                                 CHANGED_LINES="10")
+        self.assertEqual(outputs["confidence"], "low")
+        self.assertIn("partial review, 38/224 files inspected", summary)
+
+    def test_the_trend_comes_from_the_previous_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = pathlib.Path(tmp, "state.json")
+            state.write_text(json.dumps({"previous": {"v": 1, "sha": SHA, "findings": [],
+                                                      "hs": 55, "vd": "blocked"}}))
+            _, outputs, _, summary = run_publish(self.text, STATE_FILE=str(state))
+        self.assertEqual(outputs["health-trend"], "+20")
+        self.assertIn("Health 55 -> 75 (+20 since last review)", summary)
+
+    def test_the_state_marker_carries_the_verdict_and_the_score(self):
+        calls = []
+        with mock.patch.object(pr, "github", side_effect=lambda *a, **k: calls.append(a) or []):
+            run_publish(self.text, POST_MODE="comment", GH_TOKEN="t", LABELS="false")
+        body = [c[3]["body"] for c in calls if c[0] == "POST" and c[1].endswith("/issues/1/comments")][0]
+        state = json.loads(pr.history.STATE_RE.search(body).group(1))
+        self.assertEqual((state["vd"], state["hs"]), ("changes-requested", 75))
+
+    def test_the_health_file_reaches_the_check_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            health_file = pathlib.Path(tmp, "health.json")
+            run_publish(self.text, HEALTH_FILE=str(health_file))
+            saved = json.loads(health_file.read_text())
+        self.assertEqual((saved["verdict"], saved["score"], saved["confidence"]),
+                         ("changes-requested", 75, "high"))
+        self.assertIn(["1 P1 finding", 20], saved["deductions"])
+
+    def test_fail_on_verdict_gates_the_step(self):
+        self.assertEqual(run_publish(self.text, FAIL_ON_VERDICT="changes-requested")[0], 1)
+        self.assertEqual(run_publish(self.text, FAIL_ON_VERDICT="blocked")[0], 0)
+        self.assertEqual(run_publish(self.clean, FAIL_ON_VERDICT="nits")[0], 0)
+        self.assertEqual(run_publish(self.clean, FAIL_ON_VERDICT="ready")[0], 1)
+        self.assertEqual(run_publish(self.text)[0], 0)
+
+    def test_both_gates_still_work_together(self):
+        self.assertEqual(run_publish(self.text, FAIL_ON_PRIORITY="P1", FAIL_ON_VERDICT="blocked")[0], 1)
+        self.assertEqual(run_publish(self.text, FAIL_ON_PRIORITY="P0", FAIL_ON_VERDICT="nits")[0], 1)
+
+    def test_an_invalid_gate_is_refused(self):
+        with self.assertRaises(SystemExit):
+            run_publish(self.text, FAIL_ON_VERDICT="P1")
+
+
+class LabelTest(unittest.TestCase):
+    """The pull request is labelled with the verdict whenever a review is posted."""
+
+    def run_main(self, review_text, **env):
+        calls = []
+
+        def api(method, path, token, payload=None, url=None):
+            calls.append((method, path, payload))
+            return [] if path.endswith("/files") or "page=" in path else {"id": 1}
+
+        with mock.patch.object(pr, "github", side_effect=api):
+            code, outputs, _, _ = run_publish(review_text, POST_MODE="comment", GH_TOKEN="t", **env)
+        return code, outputs, calls
+
+    def test_the_verdict_label_goes_on_by_default(self):
+        _, outputs, calls = self.run_main((FIXTURES / "review-two-findings.md").read_text())
+        self.assertEqual(outputs["label"], "codex: changes-requested")
+        self.assertIn(("POST", "/repos/o/r/labels",
+                       {"name": "codex: changes-requested", "color": "d93f0b",
+                        "description": "Codex review: changes requested"}), calls)
+        self.assertIn(("POST", "/repos/o/r/issues/1/labels", {"labels": ["codex: changes-requested"]}), calls)
+
+    def test_labels_false_touches_nothing(self):
+        _, outputs, calls = self.run_main("No issues found.", LABELS="false")
+        self.assertNotIn("label", outputs)
+        self.assertEqual([c for c in calls if "labels" in c[1]], [])
+
+    def test_post_mode_none_posts_no_label_either(self):
+        _, outputs, _, _ = run_publish("No issues found.", POST_MODE="none")
+        self.assertNotIn("label", outputs)
+
+
+class ReviewEventTest(unittest.TestCase):
+    """review-event, and what happens when GitHub will not accept it."""
+
+    def post(self, event, refuse=0, **env):
+        posted = []
+
+        def api(method, path, token, payload=None, url=None):
+            if method == "POST" and path.endswith("/reviews"):
+                posted.append(payload)
+                if len(posted) <= refuse:
+                    raise urllib.error.HTTPError(
+                        "u", 422, "Unprocessable", {},
+                        io.BytesIO(b'{"message": "Review cannot be requested from the author"}'))
+            files = "/pulls/1/files" in path and "page=1" in path
+            return [{"filename": "src/pricing.ts", "patch": "@@ -10,3 +10,16 @@\n" + "+a\n" * 13}] if files else []
+
+        with mock.patch.object(pr, "github", side_effect=api):
+            run_publish((FIXTURES / "review-two-findings.md").read_text(),
+                        POST_MODE="review", GH_TOKEN="t", LABELS="false", REVIEW_EVENT=event, **env)
+        return posted
+
+    def test_the_default_is_a_plain_comment(self):
+        self.assertEqual([p["event"] for p in self.post("")], ["COMMENT"])
+
+    def test_auto_requests_changes_on_a_changes_requested_verdict(self):
+        posted = self.post("auto")
+        self.assertEqual([p["event"] for p in posted], ["REQUEST_CHANGES"])
+        self.assertTrue(posted[0]["comments"])
+
+    def test_a_refused_event_falls_back_to_a_comment_with_the_inline_comments_kept(self):
+        posted = self.post("REQUEST_CHANGES", refuse=1)
+        self.assertEqual([p["event"] for p in posted], ["REQUEST_CHANGES", "COMMENT"])
+        self.assertEqual(len(posted[0]["comments"]), len(posted[1]["comments"]))
+        self.assertTrue(posted[1]["comments"])
+
+    def test_refusing_twice_drops_the_inline_comments_as_well(self):
+        posted = self.post("auto", refuse=2)
+        self.assertEqual([p["event"] for p in posted], ["REQUEST_CHANGES", "COMMENT", "COMMENT"])
+        self.assertEqual(posted[2]["comments"], [])
+
+    def test_an_invalid_event_is_refused(self):
+        with self.assertRaises(SystemExit):
+            self.post("APPROVE")
 
 
 if __name__ == "__main__":

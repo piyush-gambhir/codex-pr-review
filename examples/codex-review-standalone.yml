@@ -145,6 +145,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write # post the review
+      issues: write # create and apply the verdict label (labels: true)
       id-token: write # AWS OIDC (bedrock provider)
       # checks: write         # uncomment together with check-run below
       # security-events: write # uncomment to upload SARIF to code scanning
@@ -200,6 +201,9 @@ jobs:
           review-instructions-file: ${{ hashFiles('trusted/.github/codex-review.md') != '' && 'trusted/.github/codex-review.md' || '' }}
           max-priority: P3
           # fail-on-priority: P1   # uncomment to fail the check on P0/P1 findings
+          # fail-on-verdict: blocked  # uncomment to fail the check on a do-not-merge verdict
+          # labels: false          # uncomment to stop labelling the PR with the verdict
+          # review-event: auto     # uncomment to request changes when the verdict asks for them
           # icons: false           # uncomment for text only, with no external images
           # exclude-paths: |       # uncomment to skip generated or vendored code
           #   **/gen/**

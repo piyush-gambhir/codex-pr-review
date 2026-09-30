@@ -387,7 +387,7 @@ class PublishIntegrationTest(unittest.TestCase):
         plan["changed-files"] = ["src/pricing.ts"]
         self.run_main(self.review_text("Convert the percentage"), plan,
                       POST_MODE="comment", GH_TOKEN="t", HIDE_PREVIOUS="false")
-        body = [a[3]["body"] for a, _ in self.calls if a[0] == "POST"][0]
+        body = [a[3]["body"] for a, _ in self.calls if a[0] == "POST" and a[1].endswith("/issues/1/comments")][0]
         state = history.parse_state(body)
         self.assertEqual(state["sha"], SHA)
         self.assertEqual(sorted(e["title"] for e in state["findings"]),

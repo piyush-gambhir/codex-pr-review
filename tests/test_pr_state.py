@@ -37,10 +37,11 @@ class FakePullRequest:
     """
 
     def __init__(self, comments=(), reviews=(), review_comments=(), threads=(), files=(),
-                 graphql_pr=True):
+                 graphql_pr=True, draft=False, mergeable="MERGEABLE", checks="SUCCESS"):
         self.comments, self.reviews = list(comments), list(reviews)
         self.review_comments, self.threads = list(review_comments), list(threads)
         self.files, self.graphql_pr = list(files), graphql_pr
+        self.draft, self.mergeable, self.checks = draft, mergeable, checks
         self.calls = []
         self.posted_body = ""
 
@@ -101,6 +102,9 @@ class FakePullRequest:
 
     def _pull(self):
         return {
+            "isDraft": self.draft,
+            "mergeable": self.mergeable,
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": self.checks}}}]},
             "comments": {
                 "totalCount": len(self.comments),
                 "nodes": [{"id": f"IC_{i}", "databaseId": 100 + i, "body": c.get("body", ""),
@@ -166,6 +170,19 @@ class FetchTest(unittest.TestCase):
         bundle = pr_state.fetch("o/r", "1", "t", api, GRAPHQL)
         self.assertIsNone(bundle["threads"])
         self.assertIsNone(bundle["hide"])
+
+    def test_the_pull_requests_own_signals_come_with_it(self):
+        bundle, _ = self.bundle(draft=True, mergeable="CONFLICTING", checks="FAILURE")
+        self.assertEqual(bundle["signals"], {"draft": True, "mergeable": "CONFLICTING",
+                                             "checks": "FAILURE"})
+        self.assertEqual(self.bundle()[0]["signals"],
+                         {"draft": False, "mergeable": "MERGEABLE", "checks": "SUCCESS"})
+
+    def test_a_pull_request_with_no_rollup_yet_reports_nothing(self):
+        api = FakePullRequest()
+        api._pull = lambda: dict(FakePullRequest._pull(api), commits={"nodes": []}, mergeable=None)
+        bundle = pr_state.fetch("o/r", "1", "t", api, GRAPHQL)
+        self.assertEqual(bundle["signals"], {"draft": False, "mergeable": "", "checks": ""})
 
     def test_graphql_failures_fall_back(self):
         self.assertIsNone(self.bundle(graphql_pr=False)[0])
@@ -255,13 +272,36 @@ class CallCountTest(unittest.TestCase):
         self.assertEqual(results[0], results[1])
         code, found, resolved, writes = results[0]
         self.assertEqual((code, found, resolved), (0, "2", "1"))
-        # Two earlier comments collapsed, the review posted, one fixed thread resolved.
-        self.assertEqual(sorted(writes), ["POST /repos/o/r/pulls/1/reviews", "minimize", "minimize", "resolve"])
+        # Two earlier comments collapsed, the review posted, one fixed thread
+        # resolved, and the verdict label made sure of and put on.
+        self.assertEqual(sorted(writes), [
+            "POST /repos/o/r/issues/1/labels", "POST /repos/o/r/labels",
+            "POST /repos/o/r/pulls/1/reviews", "minimize", "minimize", "resolve",
+        ])
+
+    def test_the_pull_requests_signals_reach_the_health_score(self):
+        api = self.api(graphql_pr=True)
+        api.mergeable, api.checks = "CONFLICTING", "FAILURE"
+        _, _, plan, outputs = run_review(api, self.previous)
+        self.assertEqual(plan["signals"], {"draft": False, "mergeable": "CONFLICTING",
+                                           "checks": "FAILURE"})
+        # One P1 and one P2 finding (-25), failing checks and a conflict (-20).
+        self.assertEqual((outputs["health-score"], outputs["verdict"]), ("55", "changes-requested"))
+
+        # On REST there is no bundle, so the score is the findings alone.
+        _, _, plan, outputs = run_review(self.api(graphql_pr=False), self.previous)
+        self.assertIsNone(plan.get("signals"))
+        self.assertEqual(outputs["health-score"], "75")
+
+    def test_no_labels_leaves_the_pull_request_alone(self):
+        api = self.api(graphql_pr=True)
+        run_review(api, self.previous, LABELS="false")
+        self.assertEqual([c for c in api.calls if "labels" in c], [])
 
     def test_the_state_marker_carries_the_settings_digest(self):
         api = self.api(graphql_pr=True)
         run_review(api, self.previous)
-        self.assertEqual(len([c for c in api.calls if c.startswith("POST")]), 1)
+        self.assertEqual(len([c for c in api.calls if c.startswith("POST /repos/o/r/pulls")]), 1)
         self.assertEqual(history.parse_state(api.posted_body)["cfg"],
                          history.settings_digest({"PROVIDER": "openai", "MODEL": "gpt-6.1-sol",
                                                   "REASONING_EFFORT": "medium", "BASE_REF": "origin/main",

@@ -103,6 +103,18 @@ on:
         description: "Fail the review when a finding at this priority or higher is reported, e.g. `P1`."
         type: string
         default: ""
+      fail-on-verdict:
+        description: "Fail the review when the merge verdict is this or worse: `ready`, `nits`, `changes-requested` or `blocked`."
+        type: string
+        default: ""
+      labels:
+        description: "Label the pull request with the merge verdict (`codex: ready`, `codex: nits`, `codex: changes-requested`, `codex: blocked`). Needs `issues: write` from the caller."
+        type: string
+        default: "true"
+      review-event:
+        description: "How the review is submitted: `COMMENT`, `REQUEST_CHANGES`, or `auto` (request changes when the verdict asks for them)."
+        type: string
+        default: COMMENT
       icons:
         description: "Show the small Octicon images in the review. `false` renders every layout as text only, with no external images."
         type: string
@@ -199,6 +211,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write # post the review
+      issues: write # create and apply the verdict label (labels: true)
       id-token: write # AWS OIDC (bedrock provider)
     steps:
       - name: Mint GitHub App token (optional custom bot identity)
@@ -265,6 +278,9 @@ jobs:
           review-instructions-file: ${{ inputs.guidelines-path != '' && hashFiles(format('trusted/{0}', inputs.guidelines-path)) != '' && format('trusted/{0}', inputs.guidelines-path) || '' }}
           max-priority: ${{ inputs.max-priority }}
           fail-on-priority: ${{ inputs.fail-on-priority }}
+          fail-on-verdict: ${{ inputs.fail-on-verdict }}
+          labels: ${{ inputs.labels }}
+          review-event: ${{ inputs.review-event }}
           icons: ${{ inputs.icons }}
           icon-base-url: ${{ inputs.icon-base-url }}
 
@@ -273,4 +289,9 @@ jobs:
         env:
           COUNT: ${{ steps.codex.outputs.findings-count }}
           HIGHEST: ${{ steps.codex.outputs.highest-priority }}
-        run: echo "Codex reported $COUNT finding(s), highest ${HIGHEST:-none}."
+          VERDICT: ${{ steps.codex.outputs.verdict }}
+          HEALTH: ${{ steps.codex.outputs.health-score }}
+          CONFIDENCE: ${{ steps.codex.outputs.confidence }}
+        run: |
+          echo "Codex reported $COUNT finding(s), highest ${HIGHEST:-none}."
+          echo "Verdict: ${VERDICT:-unknown}, health ${HEALTH:--}/100, ${CONFIDENCE:-unknown} confidence."
