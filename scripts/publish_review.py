@@ -32,6 +32,7 @@ import urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import filters  # noqa: E402
 import history  # noqa: E402
+import icons as icon_set  # noqa: E402
 import suggestions  # noqa: E402
 
 API = os.environ.get("GITHUB_API_URL", "https://api.github.com")
@@ -39,7 +40,11 @@ GRAPHQL = os.environ.get("GITHUB_GRAPHQL_URL", "https://api.github.com/graphql")
 MARKER = "<!-- codex-pr-review -->"
 # Every comment this action writes (reviews and status notes) starts with this.
 MARKER_PREFIX = "<!-- codex-pr-review"
-PRIORITY_ICON = {0: "\U0001f534", 1: "\U0001f7e0", 2: "\U0001f7e1", 3: "\u26aa"}
+# GitHub's own alert blocks carry the verdict: it draws the octicon, the colour
+# and the border, so the headline looks like the rest of the pull request page.
+# The type is the worst priority reported, TIP when there is nothing to report.
+VERDICT_ALERT = {0: "CAUTION", 1: "CAUTION", 2: "WARNING", 3: "NOTE"}
+CLEAN_ALERT = "TIP"
 # Tolerates text before the tag ("- Security [P1] ...") and a relative or
 # absolute path, since custom instructions can nudge Codex's layout.
 FINDING_RE = re.compile(
@@ -232,6 +237,8 @@ class Context:
         self.run_url = env.get("RUN_URL", "").strip()
         self.rerun_hint = env.get("RERUN_HINT", "").strip()
         self.note = ""
+        # Where the inline images come from, and whether there are any at all.
+        self.icons = icon_set.Icons.from_env(env)
         # Re-review awareness, filled in from the previous review's state.
         self.previous_sha = env.get("PREVIOUS_SHA", "").strip()
         self.scope_note = env.get("INCREMENTAL_NOTE", "").strip()
@@ -284,17 +291,29 @@ def plural(count: int, word: str) -> str:
     return f"{count} {word}{'' if count == 1 else 's'}"
 
 
-def verdict(findings: list[dict], resolved: int = 0) -> str:
-    fixed = f" \u00b7 {resolved} resolved" if resolved else ""
-    if not findings:
-        return f"\u2705 **No issues found.**{fixed}"
-    counts = ", ".join(
+def alert(kind: str, body: str) -> str:
+    """A GitHub alert block, which GitHub renders with its own icon and colour."""
+    lines = [f"> [!{kind}]"]
+    lines.extend(f"> {line}" if line.strip() else ">" for line in body.splitlines())
+    return "\n".join(lines)
+
+
+def priority_counts(findings: list[dict]) -> str:
+    return ", ".join(
         f"{sum(f['priority'] == p for f in findings)} P{p}" for p in range(4) if any(f["priority"] == p for f in findings)
     )
+
+
+def verdict(findings: list[dict], resolved: int = 0) -> str:
+    """The headline as an alert block: type from the worst priority reported."""
+    fixed = f" \u00b7 {resolved} resolved" if resolved else ""
+    if not findings:
+        return alert(CLEAN_ALERT, f"**No issues found.**{fixed}")
     worst = min(f["priority"] for f in findings)
-    if worst <= 1:
-        return f"{PRIORITY_ICON[worst]} **{plural(len(findings), 'issue')} to address** ({counts}){fixed}"
-    return f"{PRIORITY_ICON[worst]} **{plural(len(findings), 'minor issue')}** ({counts}){fixed}"
+    scale = "issue" if worst <= 1 else "minor issue"
+    verb = " to address" if worst <= 1 else ""
+    headline = f"**{plural(len(findings), scale)}{verb}** ({priority_counts(findings)}){fixed}"
+    return alert(VERDICT_ALERT.get(worst, "NOTE"), headline)
 
 
 def suggestion_block(finding: dict, exact_range: bool = True, native: bool = True) -> str:
@@ -314,10 +333,10 @@ def suggestion_block(finding: dict, exact_range: bool = True, native: bool = Tru
 
 
 def inline_comment(finding: dict, ctx: Context, exact_range: bool = True, native: bool = True) -> str:
-    icon = PRIORITY_ICON.get(finding["priority"], "\u26aa")
+    icon = ctx.icons.img(icon_set.priority(finding["priority"]))
     fix = suggestion_block(finding, exact_range, native)
     return (
-        f"{icon} **P{finding['priority']} \u00b7 {finding['title']}**\n\n{finding['body']}\n\n"
+        f"{icon}{' ' if icon else ''}**P{finding['priority']} \u00b7 {finding['title']}**\n\n{finding['body']}\n\n"
         + (f"{fix}\n\n" if fix else "")
         + f"<sub>{ctx.title} \u00b7 {location(finding, ctx)}</sub>\n"
         + f"{history.finding_marker(history.entry(finding)['fp'])}\n{MARKER}"
@@ -326,8 +345,11 @@ def inline_comment(finding: dict, ctx: Context, exact_range: bool = True, native
 
 def details(finding: dict, ctx: Context) -> str:
     """A collapsible block for a finding that has no inline comment."""
-    icon = PRIORITY_ICON.get(finding["priority"], "\u26aa")
-    summary = f"{icon} <b>P{finding['priority']}</b> \u00b7 {html.escape(finding['title'])} \u00b7 <code>{html.escape(finding['path'])}:{span(finding)}</code>"
+    icon = ctx.icons.img(icon_set.priority(finding["priority"]))
+    summary = (
+        f"{icon}{' ' if icon else ''}<b>P{finding['priority']}</b> \u00b7 {html.escape(finding['title'])}"
+        f" \u00b7 <code>{html.escape(finding['path'])}:{span(finding)}</code>"
+    )
     # Never a native suggestion here: nothing in the body anchors to a diff line.
     fix = suggestion_block(finding, exact_range=True, native=False)
     parts = [location(finding, ctx), finding["body"]] + ([fix] if fix else [])
@@ -335,22 +357,30 @@ def details(finding: dict, ctx: Context) -> str:
 
 
 def issues_table(findings: list[dict], ctx: Context, inline_ids: set[int] | None = None) -> str:
-    """One row per finding; inline_ids None drops the "where" column (check runs)."""
-    tail = " |" if inline_ids is not None else ""
-    rows = [f"| | Priority | Issue | Location |{tail}", "|---|---|---|---|" + ("---|" if tail else "")]
+    """One row per finding; inline_ids None drops the "Where" column (check runs).
+
+    The leading icon column is dropped as well when images are off, so the table
+    never carries a column of blanks.
+    """
+    graphics = ctx.icons.enabled
+    head = (["", "Priority", "Issue", "Location"] if graphics else ["Priority", "Issue", "Location"])
+    if inline_ids is not None:
+        head.append("Where")
+    rows = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
     for finding in findings:
         title = finding["title"].replace("|", "\\|")
         if finding.get("fingerprint") in ctx.still_open:
-            title += " <sub>(still open)</sub>"
+            title += " " + ctx.icons.marker("still-open", "still open")
         if finding.get("suggestion"):
             # Marks the findings that come with a ready-made fix.
-            title += f" {suggestions.TABLE_MARKER}"
-        where = "\U0001f4ac inline" if id(finding) in (inline_ids or set()) else "\u2b07\ufe0f below"
-        icon = PRIORITY_ICON.get(finding["priority"], "\u26aa")
-        rows.append(
-            f"| {icon} | P{finding['priority']} | {title} "
-            f"| {location(finding, ctx)} |" + (f" {where} |" if tail else "")
-        )
+            title += " " + ctx.icons.marker("suggestion", "suggested fix")
+        cells = [f"P{finding['priority']}", title, location(finding, ctx)]
+        if graphics:
+            cells.insert(0, ctx.icons.img(icon_set.priority(finding["priority"])))
+        if inline_ids is not None:
+            inline = id(finding) in inline_ids
+            cells.append(ctx.icons.tagged("inline" if inline else "outside", "Inline" if inline else "Below"))
+        rows.append("| " + " | ".join(cells) + " |")
     return "\n".join(rows)
 
 
@@ -359,7 +389,9 @@ def body_markdown(summary: str, findings: list[dict], ctx: Context, inline_ids: 
     inline_ids = inline_ids or set()
     parts = [MARKER, f"## {ctx.title}", verdict(findings, len(ctx.resolved)), summary]
     if findings:
-        parts.append(issues_table(findings, ctx, inline_ids))
+        # With nothing inline (comment mode, or an inline review GitHub rejected)
+        # every row would say the same thing, so the column is left out.
+        parts.append(issues_table(findings, ctx, inline_ids or None))
         detailed = [f for f in findings if id(f) not in inline_ids]
         if detailed:
             parts.append("**Details**" if inline_ids else "**Details** (click to expand)")

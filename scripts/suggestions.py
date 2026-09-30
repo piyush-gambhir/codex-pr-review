@@ -20,8 +20,6 @@ from __future__ import annotations
 import re
 
 LABEL = "Suggested fix"
-# Shown next to a finding in the issues table when it carries a suggestion.
-TABLE_MARKER = "\U0001f4a1"
 
 # The fence may be indented: finding bodies are only dedented by their common
 # indent, so a block nested under a list item still starts a few spaces in.

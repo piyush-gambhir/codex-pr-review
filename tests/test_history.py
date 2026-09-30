@@ -243,9 +243,16 @@ class RenderTest(unittest.TestCase):
         entries = [history.entry(finding("Convert the percentage"))]
         text = history.resolved_section(entries, [], self.ctx())
         self.assertIn("**Resolved since last review (1)**", text)
-        self.assertIn("~~Convert the percentage~~", text)
+        self.assertIn('alt="Resolved"> ~~Convert the percentage~~', text)
         self.assertIn(f"https://github.com/o/r/blob/{OLD_SHA}/src/pricing.ts#L15", text)
         self.assertNotIn("<details>", text)
+
+    def test_resolved_section_is_readable_without_icons(self):
+        entries = [history.entry(finding("Convert the percentage"))]
+        text = history.resolved_section(entries, [], pr.Context({"GITHUB_REPOSITORY": "o/r", "HEAD_SHA": SHA,
+                                                                "ICONS": "false"}))
+        self.assertIn("- ~~Convert the percentage~~", text)
+        self.assertNotIn("<img", text)
 
     def test_long_lists_are_collapsed(self):
         entries = [history.entry(finding(f"Issue number {i}", start=i)) for i in range(5)]
@@ -298,8 +305,14 @@ class PublishIntegrationTest(unittest.TestCase):
         self.assertEqual(outputs["resolved-count"], "1")
         self.assertIn("1 resolved", summary)
         self.assertIn("Resolved since last review (1)", summary)
-        self.assertIn("(still open)", summary)
+        self.assertIn('alt="Reported again"', summary)
         self.assertNotIn(history.STATE_PREFIX, summary)
+
+    def test_still_open_is_a_word_without_icons(self):
+        plan = self.plan("Convert the percentage", "Handle zero units")
+        _, _, summary = self.run_main(self.review_text("Handle zero units"), plan, ICONS="false")
+        self.assertIn("<sub>(still open)</sub>", summary)
+        self.assertNotIn("<img", summary)
 
     def test_incremental_base_commit_is_shortened_in_the_meta_line(self):
         _, _, summary = self.run_main("No issues found.", BASE_REF=OLD_SHA)

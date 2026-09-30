@@ -70,11 +70,25 @@ class RenderTest(unittest.TestCase):
 
     def test_summary_reuses_the_issues_table_without_the_inline_column(self):
         summary = checks.summary_markdown("Codex prose.", [finding(1)], ctx())
+        self.assertIn("> [!CAUTION]", summary)
         self.assertIn("1 issue to address", summary)
         self.assertIn("Codex prose.", summary)
-        self.assertIn("| | Priority | Issue | Location |", summary)
+        self.assertIn("|  | Priority | Issue | Location |", summary)
+        self.assertNotIn("Where", summary)
         self.assertNotIn("inline", summary)
         self.assertIn(f"Reviewed [`{SHA[:7]}`]", summary)
+
+    def test_summary_is_text_only_without_icons(self):
+        summary = checks.summary_markdown("Codex prose.", [finding(1)], ctx(ICONS="false"))
+        self.assertNotIn("<img", summary)
+        self.assertIn("| Priority | Issue | Location |", summary)
+
+    def test_in_progress_and_failure_summaries_are_alert_blocks(self):
+        payloads = []
+        with mock.patch.object(checks, "call", side_effect=lambda *a: payloads.append(a[3]) or {"id": 1}):
+            checks.start("o/r", "t", ctx())
+        self.assertIn("> [!NOTE]", payloads[0]["output"]["summary"])
+        self.assertIn('alt="In progress"', payloads[0]["output"]["summary"])
 
     def test_summary_is_truncated_to_the_api_limit(self):
         summary = checks.summary_markdown("x" * 80000, [finding(1)], ctx())

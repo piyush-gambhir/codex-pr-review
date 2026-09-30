@@ -2,6 +2,25 @@
 
 This project follows [semantic versioning](https://semver.org). The `v1` tag always points to the latest 1.x release; breaking input or output changes get a new major version.
 
+## Unreleased
+
+### Changed
+
+- **No emoji anywhere.** Everything the action posts or writes now uses GitHub's own visual language instead: the verdict, the progress note, the failure note, the skip note and the check run summary are [alert blocks](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#alerts), so GitHub draws the icon, the colour and the border. The verdict type follows the worst priority reported: `CAUTION` for P0 or P1, `WARNING` for P2, `NOTE` for P3 only, `TIP` when the diff is clean. A progress note is a `NOTE`, a failure a `CAUTION` with the error in a code block, a skip a `WARNING`.
+- The priority dots, speech balloon, down arrow, light bulb, check marks, magnifier, cross mark and skip symbol are replaced by the 16px [Octicons](icons/) in the new `icons/` directory (MIT, from `@primer/octicons` 19.38.0), each recoloured for what it means. P0 to P3 are four different glyphs rather than one glyph in four colours. Every colour clears 3:1 WCAG contrast against both GitHub's light (`#ffffff`) and dark (`#0d1117`) comment backgrounds, so no `prefers-color-scheme` switching is needed; [`icons/README.md`](icons/README.md) lists the measured ratios.
+- The issues table names its last column **Where** and says `Inline` or `Below` in words next to the icon, instead of an emoji. Every `<img>` carries meaningful `alt` text and an explicit 16x16 size, so a review reads correctly before or without the images.
+
+### Added
+
+- New input `icons` (default `true`). `false` renders every layout as words with no external images at all, for GitHub Enterprise Server or an organisation that blocks GitHub's image proxy.
+- New input `icon-base-url` to serve the images from somewhere else, such as an internal mirror.
+- New module [`scripts/icons.py`](scripts/icons.py) (the catalogue and the URL resolution) and the development script [`scripts/dev/build_icons.py`](scripts/dev/build_icons.py), which regenerates `icons/` from the Octicons npm package and refuses to write a colour that fails the contrast check.
+- The reusable workflow passes `icons` and `icon-base-url` through.
+
+### Release checklist
+
+- The default image URL is jsDelivr for this repository at the ref the action was resolved from, but only when that is the public `piyush-gambhir/codex-pr-review` at a tag or a full commit SHA. A local `./` checkout, a private copy of this repository or a branch ref falls back to `PINNED_REF` in [`scripts/icons.py`](scripts/icons.py). **Bump `PINNED_REF` to the tag being released whenever `icons/` changes, before tagging**; `tests/test_icons.py` checks it is a tag or a SHA, never a branch.
+
 ## v1.2.1 (2026-09-30)
 
 ### Removed
@@ -27,7 +46,7 @@ This project follows [semantic versioning](https://semver.org). The `v1` tag alw
 ### Added
 
 - **Adoption is a few lines.** New reusable workflow `piyush-gambhir/codex-pr-review/.github/workflows/review.yml@v1` bundles the trigger and the review, so a consuming repository writes a `uses:` line, `base-branches` and `secrets: inherit` instead of copying 180 lines of workflow.
-- **Trigger sub-action** `piyush-gambhir/codex-pr-review/trigger@v1` (`scripts/trigger.py`): parses `@gpt review [provider] [effort]`, checks write access, open PR, same-repo head and allowed base branches, reacts with 👀, and outputs `run`, `pr-number`, `head-sha`, `base-ref`, `provider`, `effort`, `comment-id` and `reason`. Use it on its own to keep a custom review job.
+- **Trigger sub-action** `piyush-gambhir/codex-pr-review/trigger@v1` (`scripts/trigger.py`): parses `@gpt review [provider] [effort]`, checks write access, open PR, same-repo head and allowed base branches, reacts with an eyes reaction, and outputs `run`, `pr-number`, `head-sha`, `base-ref`, `provider`, `effort`, `comment-id` and `reason`. Use it on its own to keep a custom review job.
 - **Two more triggers**: adding a label (`codex-review` by default, removed again so re-adding re-runs the review) and `workflow_dispatch` with a pull request number.
 - Several base branches (`base-branches: main,develop`), a configurable command, `allowed-providers`, and `runs-on` for custom or self-hosted runners.
 - The full workflow is still available as [`examples/codex-review-standalone.yml`](examples/codex-review-standalone.yml), which is also what to use on GitHub Enterprise Server.

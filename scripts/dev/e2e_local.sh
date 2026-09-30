@@ -10,8 +10,9 @@
 #
 # Any environment variable the scripts read (MAX_PRIORITY, POST_MODE,
 # REVIEW_INSTRUCTIONS, FAIL_ON_PRIORITY, HIDE_PREVIOUS, SUGGESTIONS,
-# INCLUDE_PATHS, EXCLUDE_PATHS, MAX_CHANGED_LINES, LARGE_PR, ...) can be set to
-# override the defaults below. DRY_RUN=1 skips everything that posts.
+# INCLUDE_PATHS, EXCLUDE_PATHS, MAX_CHANGED_LINES, LARGE_PR, ICONS,
+# ICON_BASE_URL, ...) can be set to override the defaults below. DRY_RUN=1 skips
+# everything that posts.
 #
 # CHECK_RUN=1 also runs the check-run steps; a personal token cannot create
 # check runs, so that only exercises the 403 warning. SARIF is always written
@@ -64,6 +65,9 @@ export SARIF_FILE="${SARIF_FILE:-$run/codex-review.sarif}" CODEX_VERSION="$codex
 export SUGGESTIONS="${SUGGESTIONS:-true}"
 export INCLUDE_PATHS="${INCLUDE_PATHS:-}" EXCLUDE_PATHS="${EXCLUDE_PATHS:-}"
 export MAX_CHANGED_LINES="${MAX_CHANGED_LINES:-}" LARGE_PR="${LARGE_PR:-warn}"
+# ICONS=false renders text only; ICON_BASE_URL points the images somewhere the
+# icons already exist, such as a pushed branch on the public repository.
+export ICONS="${ICONS:-true}" ICON_BASE_URL="${ICON_BASE_URL:-}"
 : > "$GITHUB_OUTPUT"
 echo "run dir: $run"
 

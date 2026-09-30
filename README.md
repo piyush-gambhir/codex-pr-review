@@ -13,31 +13,38 @@ Comment `@gpt review` on a pull request. About a minute later you get a review w
 
 ## What a review looks like
 
-> ## Codex review
->
-> 🟠 **5 issues to address** (4 P1, 1 P2)
->
-> The patch introduces five correctness issues, including incorrect discounts and non-integer monetary results.
->
-> | | Priority | Issue | Location | |
-> |---|---|---|---|---|
-> | 🟠 | P1 | Convert percentage points to a fraction | `e2e/pricing.ts:16` | 💬 inline |
-> | 🟠 | P1 | Round discounted totals to integer cents | `e2e/pricing.ts:16-17` | 💬 inline |
-> | 🟠 | P1 | Handle zero units before calculating the average | `e2e/pricing.ts:22` | 💬 inline |
-> | 🟠 | P1 | Round average unit prices to integer cents | `e2e/pricing.ts:22` | 💬 inline |
-> | 🟡 | P2 | Sort ascending to select the cheapest item | `e2e/pricing.ts:26` | 💬 inline |
->
-> <sub>Reviewed `314c52a` against `main` · `gpt-6.1-sol` via OpenAI API · medium effort · 36,615 input (29,312 cached) + 926 output tokens · ~$0.03 · View run</sub><br>
-> <sub>Re-run: `@gpt review` · deeper: `@gpt review high` · on Bedrock: `@gpt review bedrock`</sub>
+No emoji anywhere: the verdict is a GitHub alert block, which GitHub renders with its own icon, colour and border, and the markers are 16px [Octicons](icons/) served over a CDN. This is the review body, rendered exactly as it is posted:
 
-- **Verdict first**: ✅ no issues, 🟡 minor issues, or 🟠/🔴 issues to address, with counts per priority.
-- **Issues table**: every finding with its priority (P0 to P3) and a `file:lines` link pinned to the reviewed commit.
-- **Suggested fixes**: when a fix is a small replacement of the flagged lines, it arrives as a committable GitHub suggestion (marked 💡 in the table). Anywhere the comment can't be anchored to exactly those lines it becomes a plain "Suggested fix" code block instead, so a fix is never applied to the wrong place.
+> [!CAUTION]
+> **5 issues to address** (4 P1, 1 P2) · 2 resolved
+
+The patch introduces five correctness issues, including incorrect discounts and non-integer monetary results.
+
+|  | Priority | Issue | Location | Where |
+|---|---|---|---|---|
+| <img src="icons/priority-p1.svg" width="16" height="16" alt="High"> | P1 | Convert percentage points to a fraction <img src="icons/suggestion.svg" width="16" height="16" alt="Suggested fix"> | `e2e/pricing.ts:16` | <img src="icons/inline.svg" width="16" height="16" alt="Commented inline on the diff"> Inline |
+| <img src="icons/priority-p1.svg" width="16" height="16" alt="High"> | P1 | Round discounted totals to integer cents | `e2e/pricing.ts:16-17` | <img src="icons/inline.svg" width="16" height="16" alt="Commented inline on the diff"> Inline |
+| <img src="icons/priority-p1.svg" width="16" height="16" alt="High"> | P1 | Handle zero units before calculating the average <img src="icons/still-open.svg" width="16" height="16" alt="Reported again"> | `e2e/pricing.ts:22` | <img src="icons/inline.svg" width="16" height="16" alt="Commented inline on the diff"> Inline |
+| <img src="icons/priority-p1.svg" width="16" height="16" alt="High"> | P1 | Round average unit prices to integer cents | `e2e/pricing.ts:22` | <img src="icons/inline.svg" width="16" height="16" alt="Commented inline on the diff"> Inline |
+| <img src="icons/priority-p2.svg" width="16" height="16" alt="Medium"> | P2 | Sort ascending to select the cheapest item | `e2e/pricing.ts:26` | <img src="icons/outside.svg" width="16" height="16" alt="Reported in the review body"> Below |
+
+**Resolved since last review (2)**
+
+- <img src="icons/resolved.svg" width="16" height="16" alt="Resolved"> ~~Guard against a missing currency code~~ · `e2e/pricing.ts:9`
+- <img src="icons/resolved.svg" width="16" height="16" alt="Resolved"> ~~Reject a negative quantity~~ · `e2e/cart.ts:31`
+
+<sub>Reviewed `314c52a` against `main` · `gpt-6.1-sol` via OpenAI API · medium effort · 36,615 input (29,312 cached) + 926 output tokens · ~$0.03 · View run</sub><br>
+<sub>Re-run: `@gpt review` · deeper: `@gpt review high` · on Bedrock: `@gpt review bedrock`</sub>
+
+- **Verdict first**, as the alert block GitHub already uses on its own pages: `CAUTION` when anything is P0 or P1, `WARNING` for P2, `NOTE` for P3 only, `TIP` when the diff is clean, with the count per priority and how many findings are gone since the last review.
+- **Issues table**: every finding with its priority (P0 to P3, a different glyph each), a `file:lines` link pinned to the reviewed commit, and whether it was commented on inline or written up in the body.
+- **Suggested fixes**: when a fix is a small replacement of the flagged lines, it arrives as a committable GitHub suggestion, marked <img src="icons/suggestion.svg" width="16" height="16" alt="Suggested fix"> in the table. Anywhere the comment can't be anchored to exactly those lines it becomes a plain "Suggested fix" code block instead, so a fix is never applied to the wrong place.
 - **Inline comments** on the exact diff lines (including multi-line ranges); findings outside the diff appear as collapsible details, so nothing is lost.
-- **Progress and failures on the PR**: a "🔍 in progress" note (with a link to the live run) is replaced by the review. If anything fails, it becomes "❌ failed" with the actual error. The requesting comment gets 👀, then 🚀 or 😕.
+- **Progress and failures on the PR**: a `NOTE` "in progress" note (with a link to the live run) is replaced by the review. If anything fails, it becomes a `CAUTION` "failed" note with the actual error in a code block. The requesting comment is reacted to: eyes when the request is accepted, then rocket or confused.
 - **Re-reviews stay tidy**: earlier Codex comments are collapsed as outdated, fixed findings are listed as resolved and their inline threads are resolved on GitHub.
 - **Next steps** under every review: how to re-run, go deeper, or switch provider.
 - **What it cost**: real token counts and a cost estimate on the meta line, also available as outputs.
+- **Text only if you prefer**: `icons: false` renders every layout in words, with no external images at all.
 
 ## Quick start
 
@@ -87,9 +94,9 @@ Three ways to ask for a review, all handled by the same gate:
 
 | Trigger | How | Notes |
 |---|---|---|
-| Comment | `@gpt review [openai\|bedrock] [low\|medium\|high\|xhigh]` at the start of a PR comment | Options come from the first line; the comment gets 👀, then 🚀 or 😕 |
+| Comment | `@gpt review [openai\|bedrock] [low\|medium\|high\|xhigh]` at the start of a PR comment | Options come from the first line; the comment gets an eyes reaction, then rocket or confused |
 | Label | Add the `codex-review` label to the PR | The label is removed again, so re-adding it re-runs the review. Set `label: ""` to switch this off |
-| Manual | Actions tab → the workflow → **Run workflow** → PR number | Add a `workflow_dispatch` input named `pr-number` and pass it through as `pr-number` |
+| Manual | Actions tab, the workflow, **Run workflow**, then the PR number | Add a `workflow_dispatch` input named `pr-number` and pass it through as `pr-number` |
 
 Every trigger requires write access on the repository, an open pull request, a same-repository head branch (fork PRs are skipped, because the review job holds model credentials) and a base branch listed in `base-branches`. A PR into an unlisted base branch gets one short reply saying so; everything else is declined silently, and the workflow stays green.
 
@@ -113,6 +120,8 @@ Everything is optional. `base-branches` defaults to your repository's default br
 | `guidelines-path` | `.github/codex-review.md` | Guidelines file, read from your default branch; empty loads none |
 | `max-priority` | `P3` | Lowest priority to report |
 | `fail-on-priority` | | Fail the review when a finding at this priority or higher is reported |
+| `icons` | `true` | Show the icon images; `false` renders every layout as text only |
+| `icon-base-url` | jsDelivr | Base URL the icon images are loaded from |
 | `app-client-id` | | GitHub App client ID, to post under your own bot name and avatar |
 
 Secrets (`secrets: inherit` passes whichever you have): `OPENAI_API_KEY`, `AWS_ROLE_TO_ASSUME`, `CODEX_REVIEW_APP_PRIVATE_KEY`, and `ACTION_REPO_TOKEN` only if you run a private copy of this repository.
@@ -181,7 +190,7 @@ exclude-paths: |
 
 ### Suggested fixes
 
-`suggestions: true` (the default) asks Codex to attach the full replacement for the lines it flagged as a fenced `suggestion` block. Findings that carry one are marked 💡 in the issues table.
+`suggestions: true` (the default) asks Codex to attach the full replacement for the lines it flagged as a fenced `suggestion` block. Findings that carry one are marked with the suggestion icon in the issues table.
 
 A block only becomes a real GitHub suggestion when the inline comment covers exactly the lines the fix replaces; otherwise (a range GitHub won't anchor, a finding shown in the details, or `post-mode: comment`) it is rendered as a plain "Suggested fix" code block. Set `suggestions: false` to stop asking for them, and to render any that turn up anyway as plain blocks.
 
@@ -204,6 +213,29 @@ large-pr: skip
 - `post-mode: none`: nothing posted; use the outputs and the job summary.
 
 Every run also writes the review to the workflow's job summary.
+
+### Icons
+
+The review, the status notes, the check run summary and the job summary all use the same small set of 16px [Octicons](icons/) (MIT, recoloured for what each one means) instead of emoji. GitHub proxies images in comments through camo, so they are referenced by URL rather than inlined, and every one carries `alt` text and an explicit 16x16 size so a review still reads correctly if an image never loads.
+
+| Input | Default | Description |
+|---|---|---|
+| `icons` | `true` | `false` renders every layout in words, with no external images at all |
+| `icon-base-url` | jsDelivr | Base URL to load the images from, without a trailing slash |
+
+```yaml
+icons: false # GitHub Enterprise Server, or an organisation that blocks camo
+```
+
+The default URL is jsDelivr for this repository's `icons/` directory:
+
+```
+https://cdn.jsdelivr.net/gh/piyush-gambhir/codex-pr-review@<ref>/icons/<file>.svg
+```
+
+`<ref>` is the ref this action was resolved from, but only when that really is the public `piyush-gambhir/codex-pr-review` at a tag (`v1`, `v1.3.0`) or a full commit SHA. A local `./` checkout, a private copy of this repository or a branch ref instead gets the pinned fallback ref in [`scripts/icons.py`](scripts/icons.py) (`PINNED_REF`), so an image URL can never point at a private repository or at a branch that moves underneath a posted review. That constant is bumped as part of cutting a release whenever `icons/` changes; see the release note in [CHANGELOG.md](CHANGELOG.md).
+
+Point `icon-base-url` at your own host to serve them from somewhere a locked-down network can reach, keeping the file names in [`icons/README.md`](icons/README.md). That file also documents the colours, their measured contrast against GitHub's light and dark backgrounds, and how to regenerate the set with [`scripts/dev/build_icons.py`](scripts/dev/build_icons.py).
 
 ### Checks and code scanning
 
@@ -252,8 +284,8 @@ Needs `checks: write`. Without it the API answers 403, the action warns and the 
 
 By default reviews are posted by `github-actions`. To post under your own name and icon, use a GitHub App:
 
-1. Create a GitHub App (Settings → Developer settings → GitHub Apps → New). Name it what you want the bot to be called, for example `Acme Code Review`. Disable the webhook. Repository permissions: **Pull requests: read and write**, **Issues: read and write**.
-2. Upload the logo you want the bot to show (App settings → Display information).
+1. Create a GitHub App (Settings, Developer settings, GitHub Apps, New). Name it what you want the bot to be called, for example `Acme Code Review`. Disable the webhook. Repository permissions: **Pull requests: read and write**, **Issues: read and write**.
+2. Upload the logo you want the bot to show (App settings, Display information).
 3. Install the app on your repository, and generate a private key.
 4. Add the repository variable `CODEX_REVIEW_APP_CLIENT_ID` (the app's **Client ID**, shown on its settings page) and the secret `CODEX_REVIEW_APP_PRIVATE_KEY` (the `.pem` contents).
 5. Pass the client ID to the reusable workflow: `with: { app-client-id: "${{ vars.CODEX_REVIEW_APP_CLIENT_ID }}" }`.
@@ -318,9 +350,11 @@ The workflow mints an app token with `actions/create-github-app-token` and passe
 | `post-mode` | `review` | `review`, `comment` or `none` |
 | `hide-previous` | `true` | Collapse earlier Codex comments as outdated |
 | `status-comment` | `true` | Progress note while reviewing; becomes a failure note on errors |
-| `trigger-comment-id` | | Requesting comment; gets 🚀 on success and 😕 on failure |
+| `trigger-comment-id` | | Requesting comment; gets a rocket reaction on success and a confused one on failure |
 | `rerun-hint` | | Next-steps line under the review |
 | `title` | `Codex review` | Review heading |
+| `icons` | `true` | Show the Octicon images; `false` renders every layout as text only |
+| `icon-base-url` | jsDelivr | Base URL the icon images are loaded from, without a trailing slash |
 | `check-run` | `false` | Create a check run with the verdict and one annotation per finding; needs `checks: write` |
 | `sarif-file` | | Also write the findings as SARIF 2.1.0 to this path, for code scanning |
 | `github-token` | `github.token` | Needs `pull-requests: write`; use an app token for a custom bot identity |
@@ -410,6 +444,7 @@ The tests cover:
 - check run conclusions, annotation batching and summary truncation
 - SARIF 2.1.0 structure
 - fingerprints, state round trips, resolved versus still-open classification (full and incremental) and thread matching
+- the icon set: URL resolution (an action tag, a commit SHA, a branch, a private copy), alert type selection, alt text and sizing, text-only mode, and that nothing the action renders or this repository ships contains an emoji codepoint
 
 ## License
 

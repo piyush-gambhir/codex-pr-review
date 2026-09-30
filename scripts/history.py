@@ -213,10 +213,12 @@ def _section(heading: str, items: list) -> str:
 def resolved_section(resolved: list, carried: list, ctx) -> str:
     """"Resolved since last review", plus anything an incremental pass skipped."""
     blocks = []
+    image = ctx.icons.img("resolved") if getattr(ctx, "icons", None) else ""
+    mark = f"{image} " if image else ""
     if resolved:
         blocks.append(_section(
             f"Resolved since last review ({len(resolved)})",
-            [f"- \u2705 ~~{item.get('title', '')}~~ \u00b7 {entry_link(item, ctx)}" for item in resolved],
+            [f"- {mark}~~{item.get('title', '')}~~ \u00b7 {entry_link(item, ctx)}" for item in resolved],
         ))
     if carried:
         blocks.append(_section(

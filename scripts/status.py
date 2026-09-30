@@ -20,7 +20,7 @@ import sys
 import urllib.error
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from publish_review import MARKER_PREFIX, Context, github  # noqa: E402
+from publish_review import MARKER_PREFIX, Context, alert, github  # noqa: E402
 
 STATUS_MARKER = f"{MARKER_PREFIX}-status -->"
 
@@ -57,8 +57,10 @@ def main(action: str) -> int:
 
     if action == "start":
         body = (
-            f"{STATUS_MARKER}\n\U0001f50d **{ctx.title} in progress**\n\n"
-            f"<sub>{ctx.meta('Reviewing')}. Usually takes a minute or two; this note is replaced when the review is posted.</sub>"
+            f"{STATUS_MARKER}\n\n"
+            + alert("NOTE", ctx.icons.tagged("in-progress", f"**{ctx.title} in progress**"))
+            + f"\n\n<sub>{ctx.meta('Reviewing')}. Usually takes a minute or two; "
+            "this note is replaced when the review is posted.</sub>"
         )
         comment = github("POST", f"/repos/{repo}/issues/{pr}/comments", token, {"body": body})
         with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
@@ -70,19 +72,23 @@ def main(action: str) -> int:
     elif action == "skip":
         # The size guard decided not to review at all; there is no progress note
         # yet, so this is the only thing the pull request gets.
-        body = (
-            f"{STATUS_MARKER}\n\u23ed\ufe0f **{ctx.title} skipped**\n\n"
+        reason = (
             f"PR too large to review ({env.get('CHANGED_LINES', '?')} changed lines, "
-            f"limit {env.get('MAX_CHANGED_LINES', '?')}).\n\n"
-            f"<sub>{ctx.meta('Skipped')}</sub>" + (f"\n<sub>{ctx.rerun_hint}</sub>" if ctx.rerun_hint else "")
+            f"limit {env.get('MAX_CHANGED_LINES', '?')})."
+        )
+        body = (
+            f"{STATUS_MARKER}\n\n"
+            + alert("WARNING", ctx.icons.tagged("skipped", f"**{ctx.title} skipped**") + f"\n\n{reason}")
+            + f"\n\n<sub>{ctx.meta('Skipped')}</sub>" + (f"\n<sub>{ctx.rerun_hint}</sub>" if ctx.rerun_hint else "")
         )
         github("POST", f"/repos/{repo}/issues/{pr}/comments", token, {"body": body})
     elif action == "fail":
         reason = failure_reason(env.get("EVENTS_FILE", ""))
         detail = f"\n\n```\n{reason}\n```" if reason else ""
         body = (
-            f"{STATUS_MARKER}\n\u274c **{ctx.title} failed**{detail}\n\n"
-            f"<sub>{ctx.meta('Reviewing')}</sub>" + (f"\n<sub>{ctx.rerun_hint}</sub>" if ctx.rerun_hint else "")
+            f"{STATUS_MARKER}\n\n"
+            + alert("CAUTION", ctx.icons.tagged("failed", f"**{ctx.title} failed**") + detail)
+            + f"\n\n<sub>{ctx.meta('Reviewing')}</sub>" + (f"\n<sub>{ctx.rerun_hint}</sub>" if ctx.rerun_hint else "")
         )
         if status_id:
             github("PATCH", f"/repos/{repo}/issues/comments/{status_id}", token, {"body": body})
