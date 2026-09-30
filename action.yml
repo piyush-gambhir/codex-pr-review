@@ -97,6 +97,12 @@ inputs:
   rerun-hint:
     description: "Next-steps line shown under the review, e.g. how to re-run it. Empty shows nothing."
     default: ""
+  icons:
+    description: "Show the small Octicon images from `icons/` in the review, the status notes and the check run. `false` renders every layout as text only, with no external images (for GitHub Enterprise Server or locked-down organisations)."
+    default: "true"
+  icon-base-url:
+    description: "Base URL the icon images are loaded from, without a trailing slash. Empty serves them from jsDelivr for this action's own repository at its released ref."
+    default: ""
   check-run:
     description: "Create a check run named after `title` on the reviewed commit, with the verdict and one annotation per finding. Needs `checks: write`."
     default: "false"
@@ -231,6 +237,8 @@ runs:
         MAX_CHANGED_LINES: ${{ inputs.max-changed-lines }}
         LARGE_PR: ${{ inputs.large-pr }}
         POST_MODE: ${{ inputs.post-mode }}
+        ICONS: ${{ inputs.icons }}
+        ICON_BASE_URL: ${{ inputs.icon-base-url }}
       run: |
         python3 "$GITHUB_ACTION_PATH/scripts/filters.py"
         if [ "$(sed -n 's/^skip=//p' "$GITHUB_OUTPUT" | tail -1)" = "true" ]; then
@@ -256,6 +264,8 @@ runs:
         REASONING_EFFORT: ${{ inputs.reasoning-effort }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         RERUN_HINT: ${{ inputs.rerun-hint }}
+        ICONS: ${{ inputs.icons }}
+        ICON_BASE_URL: ${{ inputs.icon-base-url }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/status.py" start
 
     # Reads the state marker in the last Codex review on this pull request, so
@@ -291,6 +301,8 @@ runs:
         LABEL: ${{ steps.settings.outputs.label }}
         REASONING_EFFORT: ${{ inputs.reasoning-effort }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        ICONS: ${{ inputs.icons }}
+        ICON_BASE_URL: ${{ inputs.icon-base-url }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/checks.py" start
 
     - name: Set up Node.js
@@ -430,6 +442,8 @@ runs:
         INCLUDE_PATHS: ${{ inputs.include-paths }}
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
         SIZE_NOTE: ${{ steps.guard.outputs.note }}
+        ICONS: ${{ inputs.icons }}
+        ICON_BASE_URL: ${{ inputs.icon-base-url }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/publish_review.py"
 
     # The review is posted even when fail-on-priority fails the step above, so
@@ -484,6 +498,8 @@ runs:
         SUMMARY_FILE: ${{ runner.temp }}/codex-review-summary.md
         FAIL_ON_PRIORITY: ${{ inputs.fail-on-priority }}
         EVENTS_FILE: ${{ runner.temp }}/codex-review-events.jsonl
+        ICONS: ${{ inputs.icons }}
+        ICON_BASE_URL: ${{ inputs.icon-base-url }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/checks.py" finish
 
     - name: Cancel check run
@@ -499,6 +515,8 @@ runs:
         REASONING_EFFORT: ${{ inputs.reasoning-effort }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         CHECK_RUN_ID: ${{ steps.check.outputs.check-run-id }}
+        ICONS: ${{ inputs.icons }}
+        ICON_BASE_URL: ${{ inputs.icon-base-url }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/checks.py" cancel
 
     - name: Report failure on the PR
@@ -518,4 +536,6 @@ runs:
         STATUS_COMMENT_ID: ${{ steps.status.outputs.status-comment-id }}
         TRIGGER_COMMENT_ID: ${{ inputs.trigger-comment-id }}
         EVENTS_FILE: ${{ runner.temp }}/codex-review-events.jsonl
+        ICONS: ${{ inputs.icons }}
+        ICON_BASE_URL: ${{ inputs.icon-base-url }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/status.py" fail

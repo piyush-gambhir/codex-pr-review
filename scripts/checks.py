@@ -27,7 +27,17 @@ import urllib.error
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import status  # noqa: E402
-from publish_review import Context, github, issues_table, parse_priority, plural, set_output, verdict  # noqa: E402
+from publish_review import (  # noqa: E402
+    Context,
+    alert,
+    github,
+    issues_table,
+    parse_priority,
+    plural,
+    priority_counts,
+    set_output,
+    verdict,
+)
 
 # GitHub accepts at most 50 annotations per request, so the rest go in follow-up
 # PATCH calls, and caps the output summary at 65535 characters.
@@ -90,10 +100,7 @@ def headline(findings: list[dict]) -> str:
     """Plain-text verdict for the check run's output title."""
     if not findings:
         return "No issues found"
-    counts = ", ".join(
-        f"{sum(f['priority'] == p for f in findings)} P{p}" for p in range(4) if any(f["priority"] == p for f in findings)
-    )
-    return f"{plural(len(findings), 'issue')} ({counts})"
+    return f"{plural(len(findings), 'issue')} ({priority_counts(findings)})"
 
 
 def summary_markdown(prose: str, findings: list[dict], ctx: Context) -> str:
@@ -141,7 +148,11 @@ def start(repo: str, token: str, ctx: Context) -> None:
         "head_sha": ctx.head_sha,
         "status": "in_progress",
         "started_at": now(),
-        "output": {"title": "Review in progress", "summary": f"<sub>{ctx.meta('Reviewing')}</sub>"},
+        "output": {
+            "title": "Review in progress",
+            "summary": alert("NOTE", ctx.icons.tagged("in-progress", "**Review in progress**"))
+            + f"\n\n<sub>{ctx.meta('Reviewing')}</sub>",
+        },
     }
     if ctx.run_url:
         payload["details_url"] = ctx.run_url
@@ -204,7 +215,9 @@ def main(action: str) -> int:
         return 0
 
     if action == "cancel":
-        complete(repo, token, check_id, "cancelled", "Review cancelled", f"<sub>{ctx.meta('Reviewing')}</sub>")
+        summary = (alert("NOTE", ctx.icons.tagged("skipped", "**Review cancelled.**"))
+                   + f"\n\n<sub>{ctx.meta('Reviewing')}</sub>")
+        complete(repo, token, check_id, "cancelled", "Review cancelled", summary)
         return 0
 
     findings = load_findings(env.get("FINDINGS_FILE", ""))
@@ -212,7 +225,8 @@ def main(action: str) -> int:
         # The review or the publish step failed, so there is nothing to report.
         reason = status.failure_reason(env.get("EVENTS_FILE", ""))
         detail = f"\n\n```\n{reason}\n```" if reason else ""
-        summary = f"The Codex review did not complete.{detail}\n\n<sub>{ctx.meta('Reviewing')}</sub>"
+        summary = (alert("CAUTION", ctx.icons.tagged("failed", "**The Codex review did not complete.**") + detail)
+                   + f"\n\n<sub>{ctx.meta('Reviewing')}</sub>")
         complete(repo, token, check_id, "failure", "Review failed", summary)
         return 0
 

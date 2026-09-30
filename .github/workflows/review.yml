@@ -95,6 +95,14 @@ on:
         description: "Fail the review when a finding at this priority or higher is reported, e.g. `P1`."
         type: string
         default: ""
+      icons:
+        description: "Show the small Octicon images in the review. `false` renders every layout as text only, with no external images."
+        type: string
+        default: "true"
+      icon-base-url:
+        description: "Base URL the icon images are loaded from, without a trailing slash. Empty uses jsDelivr for the action's own repository."
+        type: string
+        default: ""
       app-client-id:
         description: "GitHub App client ID to post under your own bot name and avatar. Needs the CODEX_REVIEW_APP_PRIVATE_KEY secret."
         type: string
@@ -237,6 +245,8 @@ jobs:
           review-instructions-file: ${{ inputs.guidelines-path != '' && hashFiles(format('trusted/{0}', inputs.guidelines-path)) != '' && format('trusted/{0}', inputs.guidelines-path) || '' }}
           max-priority: ${{ inputs.max-priority }}
           fail-on-priority: ${{ inputs.fail-on-priority }}
+          icons: ${{ inputs.icons }}
+          icon-base-url: ${{ inputs.icon-base-url }}
 
       - name: Report
         if: always() && steps.codex.outputs.findings-count != ''

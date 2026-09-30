@@ -37,8 +37,12 @@ class StatusTest(unittest.TestCase):
                     mock.patch.object(status, "github", side_effect=lambda *a, **k: calls.append(a) or {"id": 42}):
                 status.main("start")
             self.assertIn("status-comment-id=42", out.read_text())
-        self.assertIn("in progress", calls[0][3]["body"])
-        self.assertIn("Reviewing", calls[0][3]["body"])
+        body = calls[0][3]["body"]
+        self.assertIn("> [!NOTE]", body)
+        self.assertIn('alt="In progress"', body)
+        self.assertIn("in progress", body)
+        self.assertIn("Reviewing", body)
+        self.assertTrue(body.startswith(status.STATUS_MARKER))
 
     def test_fail_edits_note_with_reason_and_reacts(self):
         path = self.events({"type": "error", "message": "model not found"})
@@ -48,7 +52,11 @@ class StatusTest(unittest.TestCase):
                 mock.patch.object(status, "github", side_effect=lambda *a, **k: calls.append(a)):
             status.main("fail")
         self.assertEqual(calls[0][:2], ("PATCH", "/repos/o/r/issues/comments/42"))
-        self.assertIn("model not found", calls[0][3]["body"])
+        body = calls[0][3]["body"]
+        self.assertIn("> [!CAUTION]", body)
+        self.assertIn('alt="Failed"> **Codex review failed**', body)
+        # The reason stays a code block, inside the alert: every line is quoted.
+        self.assertIn("> ```\n> model not found\n> ```", body)
         self.assertEqual(calls[1][1], "/repos/o/r/issues/comments/7/reactions")
         self.assertEqual(calls[1][3], {"content": "confused"})
 
@@ -59,9 +67,21 @@ class StatusTest(unittest.TestCase):
                 mock.patch.object(status, "github", side_effect=lambda *a, **k: calls.append(a)):
             status.main("skip")
         self.assertEqual(calls[0][:2], ("POST", "/repos/o/r/issues/5/comments"))
-        self.assertIn("PR too large to review (1200 changed lines, limit 500).", calls[0][3]["body"])
-        self.assertIn("skipped", calls[0][3]["body"])
+        body = calls[0][3]["body"]
+        self.assertIn("> [!WARNING]", body)
+        self.assertIn('alt="Skipped"> **Codex review skipped**', body)
+        self.assertIn("> PR too large to review (1200 changed lines, limit 500).", body)
         self.assertEqual(len(calls), 1)  # nothing to delete, no reaction
+
+    def test_status_notes_are_text_only_without_icons(self):
+        calls = []
+        env = {**ENV, "CHANGED_LINES": "1200", "MAX_CHANGED_LINES": "500", "ICONS": "false"}
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(status, "github", side_effect=lambda *a, **k: calls.append(a)):
+            status.main("skip")
+        body = calls[0][3]["body"]
+        self.assertNotIn("<img", body)
+        self.assertIn("> [!WARNING]\n> **Codex review skipped**", body)
 
     def test_done_deletes_note_and_reacts(self):
         calls = []

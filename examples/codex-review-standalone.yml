@@ -186,6 +186,7 @@ jobs:
           review-instructions-file: ${{ hashFiles('trusted/.github/codex-review.md') != '' && 'trusted/.github/codex-review.md' || '' }}
           max-priority: P3
           # fail-on-priority: P1   # uncomment to fail the check on P0/P1 findings
+          # icons: false           # uncomment for text only, with no external images
           # exclude-paths: |       # uncomment to skip generated or vendored code
           #   **/gen/**
           #   *.lock

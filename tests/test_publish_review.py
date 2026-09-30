@@ -8,7 +8,6 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 import publish_review as pr  # noqa: E402
-import suggestions  # noqa: E402
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 WORKSPACE = "/home/runner/work/repo/repo"
@@ -100,15 +99,45 @@ class RenderTest(unittest.TestCase):
         self.assertIn("(1 P1, 1 P2)", pr.verdict(self.findings))
         self.assertIn("1 minor issue", pr.verdict([self.findings[1]]))
 
+    def test_verdict_alert_type_follows_the_worst_priority(self):
+        def kind(*priorities):
+            return pr.verdict([dict(self.findings[0], priority=p) for p in priorities]).splitlines()[0]
+        self.assertEqual(kind(), "> [!TIP]")  # clean
+        self.assertEqual(kind(0), "> [!CAUTION]")
+        self.assertEqual(kind(1), "> [!CAUTION]")
+        self.assertEqual(kind(3, 1), "> [!CAUTION]")
+        self.assertEqual(kind(2), "> [!WARNING]")
+        self.assertEqual(kind(3, 2), "> [!WARNING]")
+        self.assertEqual(kind(3), "> [!NOTE]")
+
+    def test_verdict_counts_resolved(self):
+        self.assertIn("**No issues found.** · 3 resolved", pr.verdict([], 3))
+        self.assertIn("(1 P1, 1 P2) · 1 resolved", pr.verdict(self.findings, 1))
+
+    def test_alert_prefixes_every_line_and_keeps_blank_ones(self):
+        self.assertEqual(pr.alert("NOTE", "one\n\ntwo"), "> [!NOTE]\n> one\n>\n> two")
+
     def test_body_lists_every_issue_and_collapses_non_inline(self):
         body = pr.body_markdown("Summary.", self.findings, ctx(), {id(self.findings[0])})
         self.assertTrue(body.startswith(pr.MARKER))
-        self.assertIn("| \U0001f7e0 | P1 | Convert the percentage", body)
-        self.assertIn("\U0001f4ac inline", body)
+        self.assertIn("> [!CAUTION]", body)
+        self.assertIn("|  | Priority | Issue | Location | Where |", body)
+        self.assertIn("/priority-p1.svg\" width=\"16\" height=\"16\" alt=\"High\"> | P1 | Convert the percentage", body)
+        self.assertIn('alt="Commented inline on the diff"> Inline |', body)
+        self.assertIn('alt="Reported in the review body"> Below |', body)
         details = body.split("**Details**", 1)[1]
         self.assertIn("<details>", details)
         self.assertIn("Handle zero units", details)
         self.assertNotIn("Convert the percentage", details)
+
+    def test_text_only_mode_drops_the_icon_column_and_every_image(self):
+        body = pr.body_markdown("Summary.", self.findings, ctx(ICONS="false"), {id(self.findings[0])})
+        self.assertNotIn("<img", body)
+        self.assertIn("| Priority | Issue | Location | Where |", body)
+        self.assertIn("| P1 | Convert the percentage", body)
+        self.assertIn("| Inline |", body)
+        self.assertIn("| Below |", body)
+        self.assertIn("> [!CAUTION]", body)
 
     def test_meta_and_cta_footer(self):
         body = pr.body_markdown("Summary.", [], ctx())
@@ -119,9 +148,17 @@ class RenderTest(unittest.TestCase):
 
     def test_inline_comment_links_back(self):
         text = pr.inline_comment(self.findings[0], ctx())
-        self.assertIn("**P1 \u00b7 Convert the percentage", text)
+        self.assertIn('alt="High"> **P1 \u00b7 Convert the percentage', text)
         self.assertIn("#L15", text)
         self.assertTrue(text.rstrip().endswith(pr.MARKER))
+        self.assertTrue(pr.inline_comment(self.findings[0], ctx(ICONS="false")).startswith("**P1 \u00b7 "))
+
+    def test_details_summary_carries_the_priority_icon(self):
+        summary = pr.details(self.findings[1], ctx()).splitlines()[1]
+        self.assertIn("/priority-p2.svg", summary)
+        self.assertIn('alt="Medium"> <b>P2</b>', summary)
+        self.assertTrue(pr.details(self.findings[1], ctx(ICONS="false")).splitlines()[1]
+                        .startswith("<summary><b>P2</b>"))
 
     def test_html_in_titles_is_escaped_in_details(self):
         f = dict(self.findings[0], title="Use <T> & friends")
@@ -165,8 +202,9 @@ class SuggestionRenderTest(unittest.TestCase):
 
     def test_table_marks_findings_that_carry_a_fix(self):
         rows = pr.issues_table(self.findings, ctx(), set()).splitlines()[2:]
-        marked = [suggestions.TABLE_MARKER in row for row in rows]
-        self.assertEqual(marked, [True, False, True])
+        self.assertEqual(['alt="Suggested fix"' in row for row in rows], [True, False, True])
+        rows = pr.issues_table(self.findings, ctx(ICONS="false"), set()).splitlines()[2:]
+        self.assertEqual(["<sub>(suggested fix)</sub>" in row for row in rows], [True, False, True])
 
     def test_review_anchors_a_range_before_passing_a_suggestion_through(self):
         """A range finding only gets a native suggestion when both ends are in the diff."""
