@@ -282,8 +282,11 @@ def resolved_section(resolved: list, carried: list, ctx) -> str:
             [f"- {mark}~~{item.get('title', '')}~~ \u00b7 {entry_link(item, ctx)}" for item in resolved],
         ))
     if carried:
+        # Incremental passes skip untouched files; full passes read them, but a
+        # finding in an unchanged file can't have been fixed.
+        heading = "Still open, not re-checked" if getattr(ctx, "incremental", False) else "Still open, file unchanged"
         blocks.append(_section(
-            f"Still open, not re-checked ({len(carried)})",
+            f"{heading} ({len(carried)})",
             [f"- P{item.get('pri', 3)} {item.get('title', '')} \u00b7 {entry_link(item, ctx)}" for item in carried],
         ))
     return "\n\n".join(blocks)
@@ -373,10 +376,13 @@ def incremental_plan(previous_sha: str, head_sha: str) -> dict:
     if not previous_sha:
         return {}
     if previous_sha == head_sha:
-        return {"note": "Full review (no new commits since the last review)"}
+        return {"note": "Full review (no new commits since the last review)", "changed-files": []}
     known = git("cat-file", "-e", f"{previous_sha}^{{commit}}")[0] == 0
     if not known or git("merge-base", "--is-ancestor", previous_sha, head_sha)[0] != 0:
-        return {"note": f"Full review (last reviewed `{short(previous_sha)}` is no longer in this branch's history)"}
+        return {
+            "note": f"Full review (last reviewed `{short(previous_sha)}` is no longer in this branch's history)",
+            "changed-files": None,
+        }
     changed = git("diff", "--name-only", previous_sha, head_sha)[1]
     return {
         "incremental": True,
@@ -384,6 +390,23 @@ def incremental_plan(previous_sha: str, head_sha: str) -> dict:
         "changed-files": [line for line in changed.splitlines() if line],
         "note": f"Incremental: `{short(previous_sha)}`..`{short(head_sha)}`",
     }
+
+
+def changed_since(previous_sha: str, head_sha: str) -> list | None:
+    """Files changed since the last reviewed commit, which decides what can count
+    as fixed: a finding whose file did not change was not fixed, whatever Codex
+    reports this time (it is not deterministic, and rewords or drops findings on
+    an identical commit). None when that commit can't be compared (not in this
+    history, e.g. after a force-push), so every unreported finding counts as fixed.
+    """
+    if not previous_sha:
+        return None
+    if previous_sha == head_sha:
+        return []
+    known = git("cat-file", "-e", f"{previous_sha}^{{commit}}")[0] == 0
+    if not known or git("merge-base", "--is-ancestor", previous_sha, head_sha)[0] != 0:
+        return None
+    return [line for line in git("diff", "--name-only", previous_sha, head_sha)[1].splitlines() if line]
 
 
 def load_plan(path: str) -> dict:
@@ -410,6 +433,8 @@ def plan(env: dict, call, bundle: dict | None = None) -> dict:
         result.update(incremental_plan(previous.get("sha", "") if previous else "", head_sha))
         if result["note"]:
             print(result["note"])
+    if previous and "changed-files" not in result:
+        result["changed-files"] = changed_since(previous.get("sha", ""), head_sha)
     return result
 
 

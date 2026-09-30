@@ -251,6 +251,7 @@ class Context:
         self.carried: list[dict] = []
         self.still_open: set[str] = set()
         self.state = ""
+        self.incremental = False
 
     def commit_link(self) -> str:
         short = self.head_sha[:7]
@@ -491,6 +492,7 @@ def main() -> int:
     plan = history.load_plan(env.get("STATE_FILE", ""))
     previous = plan.get("previous") or {}
     ctx.previous_sha = ctx.previous_sha or previous.get("sha", "")
+    ctx.incremental = bool(plan.get("incremental"))
     ctx.resolved, ctx.carried, ctx.still_open = history.classify(
         previous.get("findings") or [], findings, plan.get("changed-files")
     )

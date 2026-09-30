@@ -308,9 +308,15 @@ class RenderTest(unittest.TestCase):
         self.assertIn("<b>Resolved since last review (5)</b>", text)
 
     def test_carried_entries_are_listed_separately(self):
-        text = history.resolved_section([], [history.entry(finding("Validate the coupon code", priority=2))], self.ctx())
+        carried = [history.entry(finding("Validate the coupon code", priority=2))]
+        ctx = self.ctx()
+        ctx.incremental = True
+        text = history.resolved_section([], carried, ctx)
         self.assertIn("**Still open, not re-checked (1)**", text)
         self.assertIn("P2 Validate the coupon code", text)
+        # A full review read the file; the finding is open because the file didn't change.
+        ctx.incremental = False
+        self.assertIn("**Still open, file unchanged (1)**", history.resolved_section([], carried, ctx))
 
 
 class PublishIntegrationTest(unittest.TestCase):
@@ -369,6 +375,7 @@ class PublishIntegrationTest(unittest.TestCase):
         plan = self.plan("Convert the percentage", "Handle zero units")
         plan["previous"]["findings"][1]["path"] = "src/coupons.ts"
         plan["changed-files"] = ["src/pricing.ts"]
+        plan["incremental"] = True
         _, outputs, summary = self.run_main("No issues found.", plan, INCREMENTAL_NOTE="Incremental: `a`..`b`")
         self.assertEqual(outputs["resolved-count"], "1")
         self.assertIn("Incremental: `a`..`b`", summary)
@@ -415,3 +422,52 @@ class PublishIntegrationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChangedSinceTest(unittest.TestCase):
+    """Only a finding whose file changed since the last review can count as fixed."""
+
+    def setUp(self):
+        import subprocess
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cwd = os.getcwd()
+        os.chdir(self.tmp.name)
+        run = lambda *a: subprocess.run(["git", *a], check=True, capture_output=True)
+        run("init", "-q")
+        run("config", "user.email", "t@example.com")
+        run("config", "user.name", "t")
+        pathlib.Path("a.py").write_text("a\n")
+        pathlib.Path("b.py").write_text("b\n")
+        run("add", "-A")
+        run("commit", "-qm", "one")
+        self.first = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        pathlib.Path("a.py").write_text("a2\n")
+        run("commit", "-qam", "two")
+        self.second = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+    def tearDown(self):
+        os.chdir(self.cwd)
+        self.tmp.cleanup()
+
+    def test_same_commit_changes_nothing(self):
+        self.assertEqual(history.changed_since(self.second, self.second), [])
+
+    def test_ancestor_lists_changed_files(self):
+        self.assertEqual(history.changed_since(self.first, self.second), ["a.py"])
+
+    def test_unknown_commit_is_not_comparable(self):
+        self.assertIsNone(history.changed_since("0" * 40, self.second))
+        self.assertIsNone(history.changed_since("", self.second))
+
+    def test_unreported_finding_in_unchanged_file_is_not_resolved(self):
+        previous = [
+            {"fp": "fa", "path": "a.py", "title": "Fix a", "pri": 2, "line": 1},
+            {"fp": "fb", "path": "b.py", "title": "Fix b", "pri": 2, "line": 1},
+        ]
+        resolved, carried, still_open = history.classify(previous, [], history.changed_since(self.first, self.second))
+        self.assertEqual([i["path"] for i in resolved], ["a.py"])
+        self.assertEqual([i["path"] for i in carried], ["b.py"])
+        # An identical commit can't fix anything, whatever Codex reports this time.
+        resolved, carried, _ = history.classify(previous, [], history.changed_since(self.second, self.second))
+        self.assertEqual((resolved, len(carried)), ([], 2))
