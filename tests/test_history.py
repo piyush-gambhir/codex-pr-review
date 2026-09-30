@@ -352,7 +352,9 @@ class PublishIntegrationTest(unittest.TestCase):
         return dict({"previous": {"v": 1, "sha": OLD_SHA, "findings": entries}}, **extra)
 
     def test_resolved_count_and_sections(self):
-        plan = self.plan("Convert the percentage", "Handle zero units")
+        # The surviving finding is reported where it was (line 15); the fixed one
+        # sat on a different line (16), so matching by place can't confuse them.
+        plan = self.plan("Handle zero units", "Convert the percentage")
         code, outputs, summary = self.run_main(self.review_text("Handle zero units"), plan)
         self.assertEqual(code, 0)
         self.assertEqual(outputs["resolved-count"], "1")
@@ -503,3 +505,11 @@ class MatchByPlaceTest(unittest.TestCase):
         previous = [self.item("Handle zero units", 22)]
         self.assertEqual(len(history.classify(previous, [self.finding("Other", 60)], None)[0]), 1)
         self.assertEqual(len(history.classify(previous, [self.finding("Other", 22, path="src/b.ts")], None)[0]), 1)
+
+    def test_older_copies_of_one_bug_all_match_it(self):
+        # The state can hold several rewordings of the same bug at the same line.
+        previous = [self.item("Handle zero units before dividing", 22), self.item("Guard NaN for empty carts", 22),
+                    self.item("Average divides by zero", 21)]
+        now = [self.finding("Return a fallback when there are no units", 21, 22)]
+        resolved, carried, still_open = history.classify(previous, now, [])
+        self.assertEqual((resolved, carried, len(still_open)), ([], [], 1))

@@ -249,11 +249,19 @@ def _match_by_place(previous: dict, findings: list, claimed: set) -> dict | None
     if not line:
         return None
     for finding in findings:
-        if id(finding) in claimed or finding.get("path") != previous.get("path"):
+        if finding.get("path") != previous.get("path"):
             continue
         start = int(finding.get("start") or 0)
         end = int(finding.get("end") or start)
-        if start and start - SAME_PLACE <= line <= end + SAME_PLACE:
+        if not start:
+            continue
+        if id(finding) in claimed:
+            # An older copy of a finding already matched (earlier runs can leave
+            # several rewordings of one bug in the state): only inside its own
+            # lines, so a fixed neighbour one line away can't hide behind it.
+            if start <= line <= end:
+                return finding
+        elif start - SAME_PLACE <= line <= end + SAME_PLACE:
             return finding
     return None
 
