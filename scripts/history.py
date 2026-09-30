@@ -51,6 +51,9 @@ TITLE_LIMIT = 120
 COLLAPSE_FROM = 4
 # Token overlap (Jaccard) at which two titles on the same path are the same finding.
 SIMILAR_ENOUGH = 0.5
+# How many lines apart a previous finding and a new one can start and still
+# be the same finding (code shifts a little between commits).
+SAME_PLACE = 3
 
 
 # Fingerprints ----------------------------------------------------------------
@@ -222,20 +225,37 @@ def latest_state(repo: str, pr: str, token: str, call, items: list | None = None
 # Classification --------------------------------------------------------------
 
 
-def _match(previous: dict, findings: list) -> dict | None:
+def _match(previous: dict, findings: list, claimed: set | None = None) -> dict | None:
     """The finding reported again for a previous entry, exactly or reworded."""
-    for finding in findings:
+    free = [f for f in findings if id(f) not in (claimed or set())]
+    for finding in free:
         if finding.get("fingerprint") == previous.get("fp"):
             return finding
     tokens = title_tokens(previous.get("title", ""))
     best, score = None, SIMILAR_ENOUGH
-    for finding in findings:
+    for finding in free:
         if finding.get("path") != previous.get("path"):
             continue
         overlap = similarity(tokens, title_tokens(finding.get("title", "")))
         if overlap >= score:
             best, score = finding, overlap
     return best
+
+
+def _match_by_place(previous: dict, findings: list, claimed: set) -> dict | None:
+    """Codex rewords freely between runs; an unclaimed finding at the same place
+    in the same file is the same finding, whatever it's called this time."""
+    line = int(previous.get("line") or 0)
+    if not line:
+        return None
+    for finding in findings:
+        if id(finding) in claimed or finding.get("path") != previous.get("path"):
+            continue
+        start = int(finding.get("start") or 0)
+        end = int(finding.get("end") or start)
+        if start and start - SAME_PLACE <= line <= end + SAME_PLACE:
+            return finding
+    return None
 
 
 def classify(previous: list, findings: list, changed_files: list | None = None):
@@ -248,8 +268,22 @@ def classify(previous: list, findings: list, changed_files: list | None = None):
     """
     touched = None if changed_files is None else {p for p in changed_files}
     resolved, carried, still_open = [], [], set()
-    for item in previous or []:
-        match = _match(item, findings)
+    # Round one: exact and reworded-title matches claim their findings; round
+    # two: what's left may match by place, so a neighbour can't be claimed twice.
+    claimed, matches = set(), {}
+    for index, item in enumerate(previous or []):
+        match = _match(item, findings, claimed)
+        if match:
+            claimed.add(id(match))
+            matches[index] = match
+    for index, item in enumerate(previous or []):
+        if index not in matches:
+            match = _match_by_place(item, findings, claimed)
+            if match:
+                claimed.add(id(match))
+                matches[index] = match
+    for index, item in enumerate(previous or []):
+        match = matches.get(index)
         if match:
             still_open.add(match["fingerprint"])
         elif touched is not None and item.get("path") not in touched:

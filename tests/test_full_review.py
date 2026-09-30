@@ -112,6 +112,27 @@ class MergeTest(unittest.TestCase):
         one.status = "ok"
         return one
 
+    def test_an_empty_cross_pass_does_not_leak_its_heading(self):
+        # Codex writes "Full review comments: None." when a pass has nothing; the
+        # merged review must still have exactly one findings heading, with the
+        # per-area summaries in the summary part.
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            review = pathlib.Path(tmp, "cross.md")
+            review.write_text("No cross-area issues found.\n\nFull review comments:\nNone.\n", encoding="utf-8")
+            cross = full_review.Pass("cross", "cross", "cross", [])
+            cross.review_file, cross.cwd, cross.status = str(review), tmp, "ok"
+            full_review.collect(cross)
+        self.assertEqual(cross.summary, "No cross-area issues found.")
+        shard = self.job("shard-1", [finding("a.ts", "Off by one in the loop")], summary="The loop is off by one.")
+        text = full_review.render(full_review.merge([shard, cross]), [shard, cross],
+                                  {"files_total": 1, "shards": 1})
+        self.assertEqual(text.count("Full review comments:"), 1)
+        summary, findings = publish_review.parse_review(text, "")
+        self.assertIn("The loop is off by one.", summary)
+        self.assertIn("Across areas:** no issues that span areas", summary)
+        self.assertEqual(len(findings), 1)
+
     def test_the_same_finding_from_two_passes_is_reported_once(self):
         left = self.job("shard-1", [finding("a.ts", "Off by one in the loop")])
         right = self.job("cross", [finding("a.ts", "Off by one in the loop")], kind="cross")

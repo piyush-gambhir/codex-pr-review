@@ -331,7 +331,11 @@ def collect(job: Pass, roots: list | None = None) -> None:
     text = pathlib.Path(job.review_file).read_text(encoding="utf-8").strip()
     where = [job.cwd, os.path.realpath(job.cwd)] + list(roots or [])
     summary, findings = publish_review.parse_review(text, "")
-    job.summary = summary if findings else text
+    # A pass with nothing to report still writes the heading ("Full review
+    # comments: None."); keep only the prose before it, or the merged review
+    # would carry two headings.
+    heading = publish_review.FINDINGS_HEADING_RE.search(text)
+    job.summary = (summary if findings else (text[: heading.start()] if heading else text)).strip()
     for finding in findings:
         finding["path"] = relative(finding["path"], where)
         finding["fingerprint"] = history.fingerprint(finding["path"], finding["title"])
@@ -369,18 +373,29 @@ def merge(jobs: list) -> list:
     return kept
 
 
+# Up to this many per-area summaries are listed in the open; more are collapsed.
+VISIBLE_AREAS = 6
+
+
 def render(findings: list, jobs: list, report: dict) -> str:
     """The merged review, in the layout publish_review.py already parses."""
     done = [job for job in jobs if job.ok()]
     lines = ["Full review: %d changed file(s) in %d shard(s), %d pass(es)." % (
         report.get("files_total", 0), report.get("shards", 0), len(done))]
     cross = next((job for job in jobs if job.kind == "cross" and job.ok()), None)
-    if cross and cross.summary:
-        lines += ["", cross.summary.strip()]
+    # What each area's pass found leads, since that describes the pull request;
+    # the cross-cutting pass follows as one line when it had nothing to add.
     areas = ["- **%s**: %s" % (job.label, one_line(job.summary))
              for job in done if job.kind != "cross" and job.summary]
-    if areas:
-        lines += ["", "<details>", "<summary>Per-area summaries</summary>", ""] + areas + ["", "</details>"]
+    if areas and len(areas) <= VISIBLE_AREAS:
+        lines += [""] + areas
+    elif areas:
+        lines += ["", "<details>", "<summary>Per-area summaries (%d)</summary>" % len(areas), ""] + areas + ["", "</details>"]
+    if cross and cross.summary:
+        if cross.findings:
+            lines += ["", "**Across areas:** " + one_line(cross.summary)]
+        else:
+            lines += ["", "**Across areas:** no issues that span areas."]
     missed = [job for job in jobs if not job.ok()]
     if missed:
         lines += ["", "Not reviewed: " + ", ".join(

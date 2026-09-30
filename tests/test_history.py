@@ -471,3 +471,35 @@ class ChangedSinceTest(unittest.TestCase):
         # An identical commit can't fix anything, whatever Codex reports this time.
         resolved, carried, _ = history.classify(previous, [], history.changed_since(self.second, self.second))
         self.assertEqual((resolved, len(carried)), ([], 2))
+
+
+class MatchByPlaceTest(unittest.TestCase):
+    """Codex rewords findings between runs; the same place is the same finding."""
+
+    def item(self, title, line, path="src/a.ts"):
+        return {"fp": history.fingerprint(path, title), "pri": 2, "path": path, "line": line, "title": title}
+
+    def finding(self, title, start, end=None, path="src/a.ts"):
+        return {"title": title, "path": path, "start": start, "end": end or start, "priority": 2,
+                "fingerprint": history.fingerprint(path, title)}
+
+    def test_reworded_finding_at_the_same_place_is_still_open(self):
+        previous = [self.item("Handle zero units before dividing", 22)]
+        now = [self.finding("Guard against NaN for empty carts", 21, 22)]
+        resolved, carried, still_open = history.classify(previous, now, [])
+        self.assertEqual((resolved, carried), ([], []))
+        self.assertEqual(still_open, {now[0]["fingerprint"]})
+
+    def test_a_neighbour_is_not_claimed_twice(self):
+        # Two bugs a line apart; one is fixed. The survivor matches its own title
+        # first, so the fixed one can't borrow it by place.
+        previous = [self.item("Convert the percentage", 15), self.item("Handle zero units", 16)]
+        now = [self.finding("Handle zero units", 16)]
+        resolved, _, still_open = history.classify(previous, now, None)
+        self.assertEqual([i["title"] for i in resolved], ["Convert the percentage"])
+        self.assertEqual(len(still_open), 1)
+
+    def test_other_files_and_far_lines_do_not_match(self):
+        previous = [self.item("Handle zero units", 22)]
+        self.assertEqual(len(history.classify(previous, [self.finding("Other", 60)], None)[0]), 1)
+        self.assertEqual(len(history.classify(previous, [self.finding("Other", 22, path="src/b.ts")], None)[0]), 1)
