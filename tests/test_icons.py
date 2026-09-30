@@ -167,7 +167,7 @@ def status_notes(**env):
 # Anything a reader would call an emoji: pictographs, dingbats, symbol blocks
 # and the variation selectors that turn a glyph into one. The typographic
 # characters the layouts really do use are the only exceptions.
-KEEP = set("—–· …‘’“”")
+KEEP = set("\u2014\u2013\u00b7\u00a0\u2026\u2018\u2019\u201c\u201d")
 EMOJI_RANGES = (
     (0x2190, 0x21FF), (0x2300, 0x23FF), (0x2460, 0x24FF), (0x25A0, 0x27BF),
     (0x2900, 0x297F), (0x2B00, 0x2BFF), (0x3030, 0x303D), (0xFE00, 0xFE0F),
