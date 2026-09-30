@@ -52,8 +52,26 @@ inputs:
     description: "Added plus deleted lines (merge base to HEAD, after the path filters) above which `large-pr` applies. Empty means no limit."
     default: ""
   large-pr:
-    description: "Over `max-changed-lines`: `warn` (review anyway and note it) or `skip` (post a note and skip the review)."
+    description: "Over `max-changed-lines`: `warn` (review anyway and note it), `skip` (post a note and skip the review) or `full` (review it shard by shard, the same as `review-mode: auto`)."
     default: warn
+  review-mode:
+    description: "`single` (one pass over the diff), `full` (one pass per shard of the diff plus a cross-cutting pass, with the coverage measured) or `auto` (full over `max-changed-lines`, single below it)."
+    default: single
+  shard-lines:
+    description: "Changed lines per shard in a full review. Directories are kept together and a file is never split, so a shard is only about this size."
+    default: "2500"
+  max-shards:
+    description: "Most shards a full review may plan. A bigger pull request gets bigger shards instead of more passes, so the cost stays bounded."
+    default: "24"
+  max-parallel:
+    description: "Shard passes to run at once in a full review. Each gets its own `CODEX_HOME`, so their session rollouts never collide."
+    default: "4"
+  pass-timeout-minutes:
+    description: "How long one pass of a full review may take. A pass that runs out of time is reported as uncovered, never silently dropped."
+    default: "10"
+  review-budget-minutes:
+    description: "How long all the passes of a full review may take together. Passes that do not start in time are reported as uncovered. Keep the job's `timeout-minutes` above this."
+    default: "20"
 
   # Review behaviour
   review-instructions:
@@ -161,6 +179,18 @@ outputs:
   changed-lines:
     description: "Added plus deleted lines between the merge base and HEAD, after the path filters."
     value: ${{ steps.guard.outputs.changed-lines }}
+  review-mode:
+    description: "What this run did: `single` or `full`."
+    value: ${{ steps.guard.outputs.review-mode }}
+  coverage-files-total:
+    description: "Changed files the review was meant to cover, after the path filters."
+    value: ${{ steps.coverage.outputs.files-total }}
+  coverage-files-inspected:
+    description: "Changed files Codex actually read, from the session rollouts."
+    value: ${{ steps.coverage.outputs.files-inspected }}
+  coverage-complete:
+    description: "`true` when every changed file was inspected."
+    value: ${{ steps.coverage.outputs.complete }}
   findings-file:
     description: "Path of a JSON file with the reported findings (priority, title, path, start, end, body, suggestion)."
     value: ${{ steps.publish.outputs.findings-file }}
@@ -254,6 +284,9 @@ runs:
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
         MAX_CHANGED_LINES: ${{ inputs.max-changed-lines }}
         LARGE_PR: ${{ inputs.large-pr }}
+        # Resolved here, where the changed-line count already exists: `auto` and
+        # `large-pr: full` both need it to decide between single and full.
+        REVIEW_MODE: ${{ inputs.review-mode }}
         POST_MODE: ${{ inputs.post-mode }}
         ICONS: ${{ inputs.icons }}
         ICON_BASE_URL: ${{ inputs.icon-base-url }}
@@ -311,6 +344,7 @@ runs:
         FORCE: ${{ inputs.force }}
         # The settings the digest covers; publish_review.py writes it from the
         # same variables, so the two must stay in step.
+        REVIEW_MODE: ${{ steps.guard.outputs.review-mode }}
         INCREMENTAL: ${{ inputs.incremental }}
         SUGGESTIONS: ${{ inputs.suggestions }}
         MAX_PRIORITY: ${{ inputs.max-priority }}
@@ -555,17 +589,38 @@ runs:
         AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
         CODEX_HOME: ${{ runner.temp }}/codex-home
         BASE_REF: ${{ steps.history.outputs.review-base || inputs.base-ref }}
+        # A full review runs one pass per shard of the diff, so the loop, the
+        # synthetic bases and the merge live in full_review.py; the single-pass
+        # path below is unchanged.
+        REVIEW_MODE: ${{ steps.guard.outputs.review-mode }}
+        REVIEW_FILE: ${{ runner.temp }}/codex-review.md
+        EVENTS_FILE: ${{ runner.temp }}/codex-review-events.jsonl
+        COVERAGE_FILE: ${{ runner.temp }}/codex-review-coverage.json
+        CODEX_HOMES_FILE: ${{ runner.temp }}/codex-review-homes.txt
+        CODEX_BIN: ${{ runner.temp }}/codex-cli/node_modules/.bin/codex
+        REVIEW_WORKSPACE: ${{ github.workspace }}/${{ inputs.working-directory }}
+        INCLUDE_PATHS: ${{ inputs.include-paths }}
+        EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
+        SHARD_LINES: ${{ inputs.shard-lines }}
+        MAX_SHARDS: ${{ inputs.max-shards }}
+        MAX_PARALLEL: ${{ inputs.max-parallel }}
+        PASS_TIMEOUT_MINUTES: ${{ inputs.pass-timeout-minutes }}
+        REVIEW_BUDGET_MINUTES: ${{ inputs.review-budget-minutes }}
       run: |
-        review_file="$RUNNER_TEMP/codex-review.md"
-        events_file="$RUNNER_TEMP/codex-review-events.jsonl"
+        review_file="$REVIEW_FILE"
+        events_file="$EVENTS_FILE"
         echo "review-file=$review_file" >> "$GITHUB_OUTPUT"
         status=0
-        # Not --ephemeral: the session rollout under $CODEX_HOME/sessions is the
-        # only place the real token counts appear, and CODEX_HOME is a temp dir
-        # thrown away with the runner.
-        "$RUNNER_TEMP/codex-cli/node_modules/.bin/codex" exec review \
-          --base "$BASE_REF" --json -o "$review_file" \
-          < /dev/null > "$events_file" || status=$?
+        if [ "$REVIEW_MODE" = "full" ]; then
+          python3 "$GITHUB_ACTION_PATH/scripts/full_review.py" || status=$?
+        else
+          # Not --ephemeral: the session rollout under $CODEX_HOME/sessions is the
+          # only place the real token counts appear, and CODEX_HOME is a temp dir
+          # thrown away with the runner.
+          "$CODEX_BIN" exec review \
+            --base "$BASE_REF" --json -o "$review_file" \
+            < /dev/null > "$events_file" || status=$?
+        fi
 
         # Surface errors, skipping retry noise.
         jq -r 'select((.type == "error" or .type == "turn.failed") and ((.message // "") | startswith("Reconnecting") | not)) | "::error::Codex: \(.message // .error.message // tostring)"' "$events_file" | sort -u || true
@@ -577,16 +632,38 @@ runs:
         fi
 
     # Review mode reports zero usage on turn.completed, so the real counts come
-    # from the session rollout Codex just wrote.
+    # from the session rollout Codex just wrote. A full review writes one rollout
+    # per pass, in the homes listed in CODEX_HOMES_FILE, and the cost is all of
+    # them together.
     - name: Measure token usage and cost
       id: usage
       if: steps.guard.outputs.skip != 'true' && steps.rereview.outputs.skipped != 'true'
       shell: bash
       env:
         CODEX_HOME: ${{ runner.temp }}/codex-home
+        CODEX_HOMES_FILE: ${{ runner.temp }}/codex-review-homes.txt
         MODEL: ${{ steps.settings.outputs.model }}
         PRICING: ${{ inputs.pricing }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/usage.py"
+
+    # What the reviewer actually read, out of the session rollouts. A full review
+    # has already written the file; a single one is measured here, so both modes
+    # publish the same coverage contract.
+    - name: Measure review coverage
+      id: coverage
+      if: steps.guard.outputs.skip != 'true' && steps.rereview.outputs.skipped != 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        CODEX_HOME: ${{ runner.temp }}/codex-home
+        CODEX_HOMES_FILE: ${{ runner.temp }}/codex-review-homes.txt
+        COVERAGE_FILE: ${{ runner.temp }}/codex-review-coverage.json
+        REVIEW_MODE: ${{ steps.guard.outputs.review-mode }}
+        BASE_REF: ${{ inputs.base-ref }}
+        REVIEW_WORKSPACE: ${{ github.workspace }}/${{ inputs.working-directory }}
+        INCLUDE_PATHS: ${{ inputs.include-paths }}
+        EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
+      run: python3 "$GITHUB_ACTION_PATH/scripts/coverage.py"
 
     - name: Publish review
       id: publish
@@ -620,12 +697,15 @@ runs:
         INCLUDE_PATHS: ${{ inputs.include-paths }}
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
         SIZE_NOTE: ${{ steps.guard.outputs.note }}
+        # What the review actually covered, shown in the meta line under it.
+        COVERAGE_FILE: ${{ runner.temp }}/codex-review-coverage.json
         ICONS: ${{ inputs.icons }}
         ICON_BASE_URL: ${{ inputs.icon-base-url }}
         # The settings digest the posted review carries, so the next run can tell
         # whether asking again could say anything new. Same variables as the
         # skip-unchanged step above.
         PROVIDER: ${{ inputs.provider }}
+        REVIEW_MODE: ${{ steps.guard.outputs.review-mode }}
         INCREMENTAL: ${{ inputs.incremental }}
         REVIEW_INSTRUCTIONS: ${{ inputs.review-instructions }}
         REVIEW_INSTRUCTIONS_FILE: ${{ inputs.review-instructions-file }}

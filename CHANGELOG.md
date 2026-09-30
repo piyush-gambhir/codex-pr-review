@@ -2,6 +2,25 @@
 
 This project follows [semantic versioning](https://semver.org). The `v1` tag always points to the latest 1.x release; breaking input or output changes get a new major version.
 
+## Unreleased
+
+Reviews that cover the whole pull request, and say how much of it they actually read.
+
+### Added
+
+- **Full reviews.** New input `review-mode`: `single` (one pass over the diff, the default and exactly what it did before), `full` (one pass per shard of the diff plus a cross-cutting pass), or `auto` (full over `max-changed-lines`, single below it). `large-pr: full` says the same thing from the size guard's side, `@gpt review full` asks for one run, and the resolved mode is an action output and part of the settings digest, so a single review never satisfies a later request for a full one.
+- **Shards that keep the whole pull request in view** ([`scripts/shards.py`](scripts/shards.py)). The diff is cut into shards of about `shard-lines` changed lines (default 2500), keeping directories together, never splitting a file and packing tests after the source they belong with, in a deterministic order. Each shard is reviewed in a checkout of the full pull request head with `--base` pointing at a synthetic commit: HEAD's tree with only that shard's files put back to their merge-base versions (added files removed, deleted files restored, renames undone). `git diff` between the two is exactly the shard, while every other file is present at its final state, so Codex reads real callers rather than a slice of a diff. The commits are built with `read-tree`, `update-index`, `write-tree` and `commit-tree` against a temporary index file: no ref is created and neither the working tree nor the repository's index is touched. New inputs `shard-lines` and `max-shards` (default 24, so a bigger pull request gets bigger shards rather than more model calls).
+- **Passes run concurrently** ([`scripts/full_review.py`](scripts/full_review.py)), up to `max-parallel` (default 4) at a time, each with its own `CODEX_HOME` so their session rollouts never collide, each in a reused worktree of the pull request head. New inputs `pass-timeout-minutes` (default 10) and `review-budget-minutes` (default 20); a pass that runs out of time, fails, or never starts is reported as uncovered and named under the review, never silently dropped. Every pass's findings are then merged, de-duplicated on the fingerprint re-reviews already use (keeping the worst priority and any suggested fix) and written back out in Codex's own review layout, so publishing a full review and publishing a single one are the same code path.
+- **A follow-up pass and a cross-cutting pass.** Any changed file no pass actually read gets a shard of its own; then the whole diff is reviewed once more with the per-area summaries in its instructions, asked only for issues that span areas: an API or contract change against callers that were not changed with it, wiring, authentication applied to some paths but not others, migrations against the code that reads those columns.
+- **Measured coverage** ([`scripts/coverage.py`](scripts/coverage.py)). Both modes now write `$RUNNER_TEMP/codex-review-coverage.json` with `{"mode", "complete", "files_total", "files_inspected", "uncovered", "shards", "passes"}`, show it in the meta line under the review (`Coverage 224/224 files (full, 12 passes)`) and publish it as the outputs `coverage-files-total`, `coverage-files-inspected` and `coverage-complete`. It is read out of the session rollouts Codex wrote, not assumed: a changed file counts as inspected when Codex read the file itself (`cat`, `sed -n`, `nl`, a file-reading tool call) or read a diff whose recorded output contained it, so a diff truncated before it reached a file counts only as far as it got, and listings and searches (`ls`, `rg`, `git diff --stat`) do not count at all. "Inspected" is an honest floor on the review's scope, not a promise that every bug was found.
+- The trigger action gained a `full` input and a `full` output, and the reusable workflow gained `review-mode`, `max-changed-lines`, `shard-lines` and `timeout-minutes` inputs.
+- The end-to-end harness takes `FULL=1` and `SHARD_LINES=...`, so a small pull request can be made to shard for real.
+
+### Changed
+
+- `scripts/usage.py` sums every pass's rollout, from the homes listed in `CODEX_HOMES_FILE`, so a full review's cost is the cost of all of it. Requests are now de-duplicated per rollout file rather than globally, so two passes that happen to use the same tokens are billed as two requests.
+- The re-run hint offers `full` alongside `force`, `high` and `bedrock`.
+
 ## v1.3.0 (2026-09-30)
 
 Faster and cheaper reviews, and a GitHub-native look with no emoji.

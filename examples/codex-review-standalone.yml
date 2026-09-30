@@ -12,6 +12,7 @@ name: Codex PR Review
 #   @gpt review high             more reasoning for this request
 #   @gpt review bedrock          run on Amazon Bedrock this time
 #   @gpt review openai xhigh     provider and effort together
+#   @gpt review full             review every changed file, shard by shard
 #   @gpt review force            review this commit again even if it has a review
 #
 # The command must start the comment. Nothing runs on open or push.
@@ -53,6 +54,7 @@ jobs:
       provider: ${{ steps.check.outputs.provider }}
       effort: ${{ steps.check.outputs.effort }}
       force: ${{ steps.check.outputs.force }}
+      full: ${{ steps.check.outputs.full }}
     steps:
       - name: Parse the request and check the PR
         id: check
@@ -67,18 +69,21 @@ jobs:
             const base = process.env.BASE_BRANCH;
             core.setOutput('run', 'false');
 
-            // Words after "@gpt review" on the first line choose provider, effort
-            // and whether to review a commit that already has a review.
+            // Words after "@gpt review" on the first line choose provider, effort,
+            // a full review of every changed file, and whether to review a commit
+            // that already has a review.
             const providers = ['openai', 'bedrock'];
             const efforts = ['low', 'medium', 'high', 'xhigh'];
             let provider = process.env.DEFAULT_PROVIDER;
             let effort = process.env.DEFAULT_EFFORT;
             let force = false;
+            let full = false;
             const words = context.payload.comment.body.split('\n')[0].trim().split(/\s+/).slice(2);
             for (const word of words.map((w) => w.toLowerCase())) {
               if (providers.includes(word)) provider = word;
               else if (efforts.includes(word)) effort = word;
               else if (word === 'force') force = true;
+              else if (word === 'full') full = true;
               else {
                 core.notice(`Ignoring unknown option '${word}'.`);
               }
@@ -119,6 +124,7 @@ jobs:
             core.setOutput('provider', provider);
             core.setOutput('effort', effort);
             core.setOutput('force', force ? 'true' : 'false');
+            core.setOutput('full', full ? 'true' : 'false');
 
             // Acknowledge the request; best effort only.
             try {
@@ -195,7 +201,11 @@ jobs:
           github-token: ${{ steps.app.outputs.token || github.token }}
           trigger-comment-id: ${{ github.event.comment.id }}
           force: ${{ needs.gate.outputs.force }}
-          rerun-hint: "Re-run: `@gpt review` \u00b7 same commit again: `@gpt review force` \u00b7 deeper: `@gpt review high` \u00b7 on Bedrock: `@gpt review bedrock`"
+          # `@gpt review full` reviews every changed file, shard by shard, and
+          # says how much of the diff it actually read. `auto` with
+          # max-changed-lines does the same over a size of your choosing.
+          review-mode: ${{ needs.gate.outputs.full == 'true' && 'full' || 'single' }}
+          rerun-hint: "Re-run: `@gpt review` \u00b7 same commit again: `@gpt review force` \u00b7 deeper: `@gpt review high` \u00b7 every file: `@gpt review full` \u00b7 on Bedrock: `@gpt review bedrock`"
           # Optional: repository-specific guidelines (file may not exist).
           review-instructions-file: ${{ hashFiles('trusted/.github/codex-review.md') != '' && 'trusted/.github/codex-review.md' || '' }}
           max-priority: P3

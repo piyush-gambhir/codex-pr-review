@@ -79,6 +79,22 @@ on:
         description: "Review even when the commit already has one, for triggers that carry no words of their own (a label, a manual run)."
         type: boolean
         default: false
+      review-mode:
+        description: "`single` (one pass over the diff), `full` (one pass per shard plus a cross-cutting pass, with the coverage measured) or `auto` (full over `max-changed-lines`). `@gpt review full` asks for a full review for one run."
+        type: string
+        default: single
+      max-changed-lines:
+        description: "Added plus deleted lines above which `review-mode: auto` reviews shard by shard. Empty means no limit."
+        type: string
+        default: ""
+      shard-lines:
+        description: "Changed lines per shard in a full review."
+        type: string
+        default: "2500"
+      timeout-minutes:
+        description: "Job timeout. A full review needs room for its passes: keep it above `review-budget-minutes` (20 by default) plus the install."
+        type: number
+        default: 30
       runs-on:
         description: "Runner label, or a JSON array of labels such as `[\"self-hosted\", \"linux\"]`."
         type: string
@@ -156,6 +172,7 @@ jobs:
       provider: ${{ steps.trigger.outputs.provider }}
       effort: ${{ steps.trigger.outputs.effort }}
       force: ${{ steps.trigger.outputs.force }}
+      full: ${{ steps.trigger.outputs.full }}
       comment-id: ${{ steps.trigger.outputs.comment-id }}
       reason: ${{ steps.trigger.outputs.reason }}
     steps:
@@ -187,9 +204,10 @@ jobs:
     needs: trigger
     if: needs.trigger.outputs.run == 'true'
     runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
-    # A review that has not finished in this long is not going to: the model call
-    # is the only slow step, and it is billed for as long as it runs.
-    timeout-minutes: 30
+    # A review that has not finished in this long is not going to: the model calls
+    # are the only slow steps, and they are billed for as long as they run. A full
+    # review keeps its own budget as well, so this is the outer limit.
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     # One review at a time per pull request, and a newer request cancels the one
     # in flight: that review is already out of date and still costing money. The
     # cancelled run removes its own progress note and leaves no failure note.
@@ -260,7 +278,11 @@ jobs:
           trigger-comment-id: ${{ needs.trigger.outputs.comment-id }}
           skip-unchanged: ${{ inputs.skip-unchanged }}
           force: ${{ needs.trigger.outputs.force }}
-          rerun-hint: "Re-run: `${{ inputs.command }}` \u00b7 same commit again: `${{ inputs.command }} force` \u00b7 deeper: `${{ inputs.command }} high` \u00b7 on Bedrock: `${{ inputs.command }} bedrock`"
+          # `@gpt review full` asks for a full review for this run only.
+          review-mode: ${{ needs.trigger.outputs.full == 'true' && 'full' || inputs.review-mode }}
+          max-changed-lines: ${{ inputs.max-changed-lines }}
+          shard-lines: ${{ inputs.shard-lines }}
+          rerun-hint: "Re-run: `${{ inputs.command }}` \u00b7 same commit again: `${{ inputs.command }} force` \u00b7 deeper: `${{ inputs.command }} high` \u00b7 every file: `${{ inputs.command }} full` \u00b7 on Bedrock: `${{ inputs.command }} bedrock`"
           # Guidelines are optional: the file may not exist in the caller's repo.
           review-instructions-file: ${{ inputs.guidelines-path != '' && hashFiles(format('trusted/{0}', inputs.guidelines-path)) != '' && format('trusted/{0}', inputs.guidelines-path) || '' }}
           max-priority: ${{ inputs.max-priority }}
@@ -273,4 +295,9 @@ jobs:
         env:
           COUNT: ${{ steps.codex.outputs.findings-count }}
           HIGHEST: ${{ steps.codex.outputs.highest-priority }}
-        run: echo "Codex reported $COUNT finding(s), highest ${HIGHEST:-none}."
+          MODE: ${{ steps.codex.outputs.review-mode }}
+          INSPECTED: ${{ steps.codex.outputs.coverage-files-inspected }}
+          TOTAL: ${{ steps.codex.outputs.coverage-files-total }}
+        run: |
+          echo "Codex reported $COUNT finding(s), highest ${HIGHEST:-none}."
+          echo "Mode ${MODE:-single}, inspected ${INSPECTED:-?}/${TOTAL:-?} changed files."

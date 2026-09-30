@@ -15,6 +15,13 @@
 # ICON_BASE_URL, SKIP_UNCHANGED, FORCE, ...) can be set to override the defaults
 # below. DRY_RUN=1 skips everything that posts.
 #
+# FULL=1 runs the full review instead of one pass: the diff is cut into shards
+# of SHARD_LINES changed lines (default 2500), each reviewed against a synthetic
+# base in its own worktree and its own CODEX_HOME, then a cross-cutting pass and
+# the merge. MAX_PARALLEL, MAX_SHARDS, PASS_TIMEOUT_MINUTES and
+# REVIEW_BUDGET_MINUTES tune it. On a small PR use a tiny SHARD_LINES to force
+# real sharding, e.g. FULL=1 SHARD_LINES=10.
+#
 # Re-running it straight away posts the "already reviewed" note and calls no
 # model, the way the action does; FORCE=1 reviews the same commit again.
 #
@@ -78,15 +85,24 @@ export PROVIDER="${PROVIDER:-openai}" MAX_PRIORITY="${MAX_PRIORITY:-P3}"
 export REVIEW_INSTRUCTIONS="${REVIEW_INSTRUCTIONS:-}" REVIEW_INSTRUCTIONS_FILE="${REVIEW_INSTRUCTIONS_FILE:-}"
 export SKIP_UNCHANGED="${SKIP_UNCHANGED:-true}"
 case "${FORCE:-}" in 1|true|yes) export FORCE=true ;; *) export FORCE=false ;; esac
+# FULL=1 is the short way to ask for review-mode: full.
+case "${FULL:-}" in 1|true|yes) export REVIEW_MODE=full ;; *) export REVIEW_MODE="${REVIEW_MODE:-single}" ;; esac
+export SHARD_LINES="${SHARD_LINES:-2500}" MAX_SHARDS="${MAX_SHARDS:-24}"
+export MAX_PARALLEL="${MAX_PARALLEL:-4}"
+export PASS_TIMEOUT_MINUTES="${PASS_TIMEOUT_MINUTES:-10}" REVIEW_BUDGET_MINUTES="${REVIEW_BUDGET_MINUTES:-20}"
+export COVERAGE_FILE="$run/codex-review-coverage.json"
+export CODEX_HOMES_FILE="$run/codex-review-homes.txt"
 : > "$GITHUB_OUTPUT"
 echo "run dir: $run"
 
 post() { [ "${DRY_RUN:-0}" = "1" ] || "$@"; }
 output() { sed -n "s/^$1=//p" "$GITHUB_OUTPUT" | tail -1; }
 
-# Size guard, the same order action.yml runs it: before anything is posted.
+# Size guard, the same order action.yml runs it: before anything is posted. It
+# also resolves review-mode, since `auto` needs the changed-line count.
 (cd "$checkout" && python3 "$root/scripts/filters.py")
 export SIZE_NOTE="$(sed -n 's/^note=//p' "$GITHUB_OUTPUT" | tail -1)"
+export REVIEW_MODE="$(sed -n 's/^review-mode=//p' "$GITHUB_OUTPUT" | tail -1)"
 if [ "$(sed -n 's/^skip=//p' "$GITHUB_OUTPUT" | tail -1)" = "true" ]; then
   echo "skipping the review: over max-changed-lines"
   CHANGED_LINES="$(sed -n 's/^changed-lines=//p' "$GITHUB_OUTPUT" | tail -1)" \
@@ -129,12 +145,20 @@ CODEX_PROVIDER=openai MODEL=unused SANDBOX=read-only python3 "$root/scripts/writ
 sed -i.bak '/^model = /d' "$CODEX_HOME/config.toml" && rm -f "$CODEX_HOME/config.toml.bak"
 
 status=0
-# Not --ephemeral, so the session rollout with the real token counts is kept.
-(cd "$checkout" && "$codex" exec review --base "$review_base" --json \
-  -o "$run/codex-review.md" < /dev/null > "$run/codex-review-events.jsonl" 2> "$run/codex.stderr") || status=$?
-rm -f "$CODEX_HOME/auth.json"
-echo "codex exit: $status"
 export REVIEW_FILE="$run/codex-review.md" EVENTS_FILE="$run/codex-review-events.jsonl"
+if [ "$REVIEW_MODE" = "full" ]; then
+  # One pass per shard, each against a synthetic base in its own worktree and
+  # its own CODEX_HOME, then the cross-cutting pass and the merge.
+  (cd "$checkout" && BASE_REF="$review_base" CODEX_BIN="$codex" \
+    python3 "$root/scripts/full_review.py" 2> "$run/codex.stderr") || status=$?
+else
+  # Not --ephemeral, so the session rollout with the real token counts is kept.
+  (cd "$checkout" && "$codex" exec review --base "$review_base" --json \
+    -o "$REVIEW_FILE" < /dev/null > "$EVENTS_FILE" 2> "$run/codex.stderr") || status=$?
+fi
+# The local login travelled into every per-pass home, so none of them keeps it.
+find "$run" -name auth.json -delete 2> /dev/null || true
+echo "codex exit: $status"
 
 if [ "$status" -ne 0 ] || [ ! -s "$REVIEW_FILE" ]; then
   post python3 "$root/scripts/status.py" fail
@@ -143,10 +167,14 @@ if [ "$status" -ne 0 ] || [ ! -s "$REVIEW_FILE" ]; then
   exit 1
 fi
 
-# Token usage and cost, the same step action.yml runs before publishing. MODEL
-# is the local ChatGPT login here, so PRICING names it to get a cost estimate.
+# Token usage and cost, the same step action.yml runs before publishing, summed
+# over every pass's home. MODEL is the local ChatGPT login here, so PRICING names
+# it to get a cost estimate.
 PRICING="${PRICING:-{\"local ChatGPT login\": [2, 0.2, 10]}}" python3 "$root/scripts/usage.py"
 export USAGE_TEXT="$(output usage-text)"
+
+# What the reviewer actually read. A full review has already written the file.
+(cd "$checkout" && python3 "$root/scripts/coverage.py")
 
 # SARIF is a local file, so it is written in dry runs too.
 extras() {

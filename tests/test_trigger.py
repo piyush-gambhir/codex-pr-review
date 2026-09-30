@@ -192,6 +192,31 @@ class TriggerTest(unittest.TestCase):
         out, _ = self.run_trigger("issue_comment", comment_event("@gpt review force"), permission="read")
         self.assertEqual((out["run"], out["force"]), ("false", "false"))
 
+    # full --------------------------------------------------------------------
+
+    def test_full_asks_for_a_full_review(self):
+        out, _ = self.run_trigger("issue_comment", comment_event("@gpt review full"))
+        self.assertEqual((out["run"], out["full"]), ("true", "true"))
+        out, _ = self.run_trigger("issue_comment", comment_event("@gpt review bedrock high FULL force"))
+        self.assertEqual((out["provider"], out["effort"], out["full"], out["force"]),
+                         ("bedrock", "high", "true", "true"))
+
+    def test_without_the_word_a_review_is_a_single_pass(self):
+        out, _ = self.run_trigger("issue_comment", comment_event())
+        self.assertEqual(out["full"], "false")
+        out, _ = self.run_trigger("issue_comment", comment_event("@gpt review force"))
+        self.assertEqual((out["full"], out["force"]), ("false", "true"))
+
+    def test_the_input_asks_for_it_on_triggers_that_carry_no_words(self):
+        out, _ = self.run_trigger("pull_request", label_event(), FULL="true")
+        self.assertEqual((out["run"], out["full"]), ("true", "true"))
+        out, _ = self.run_trigger("workflow_dispatch", {}, PR_NUMBER="7", FULL="true")
+        self.assertEqual((out["run"], out["full"]), ("true", "true"))
+
+    def test_a_declined_request_asks_for_nothing(self):
+        out, _ = self.run_trigger("issue_comment", comment_event("@gpt review full"), permission="read")
+        self.assertEqual((out["run"], out["full"]), ("false", "false"))
+
     # pull_request labelled ---------------------------------------------------
 
     def test_label_runs_and_removes_the_label(self):

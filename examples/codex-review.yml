@@ -6,6 +6,8 @@ name: Codex PR Review
 #            @gpt review high         more reasoning for this request
 #            @gpt review bedrock      run on Amazon Bedrock this time
 #            @gpt review openai xhigh provider and effort together
+#            @gpt review full         review every changed file, shard by shard,
+#                                     and report how much of it was read
 #            @gpt review force        review this commit again even if it has
 #                                     a review with the same settings
 #   label    add the `codex-review` label (it comes off again, so re-adding
@@ -54,6 +56,12 @@ jobs:
       # default-effort: medium
       # skip-unchanged: false  # uncomment to review again even when nothing changed
       # force: true            # uncomment to make label and manual runs always review
+      # Review every changed file, shard by shard, once a PR gets big, and say
+      # how much of it was actually read (see "Full reviews" in the README):
+      # review-mode: auto
+      # max-changed-lines: 3000
+      # shard-lines: 2500
+      # timeout-minutes: 60    # a full review needs room for its passes
       # max-priority: P3
       # fail-on-priority: P1   # uncomment to fail the check on P0/P1 findings
       # icons: false           # uncomment for text only, with no external images

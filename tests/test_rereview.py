@@ -17,8 +17,9 @@ URL = "https://github.com/o/r/pull/1#issuecomment-7"
 
 SETTINGS = {
     "PROVIDER": "openai", "MODEL": "gpt-6.1-sol", "REASONING_EFFORT": "medium",
-    "BASE_REF": "origin/main", "INCREMENTAL": "false", "SUGGESTIONS": "true",
-    "MAX_PRIORITY": "P3", "POST_MODE": "review", "INCLUDE_PATHS": "", "EXCLUDE_PATHS": "",
+    "BASE_REF": "origin/main", "REVIEW_MODE": "single", "INCREMENTAL": "false",
+    "SUGGESTIONS": "true", "MAX_PRIORITY": "P3", "POST_MODE": "review",
+    "INCLUDE_PATHS": "", "EXCLUDE_PATHS": "",
     "REVIEW_INSTRUCTIONS": "", "REVIEW_INSTRUCTIONS_FILE": "",
 }
 
@@ -60,8 +61,17 @@ class SettingsDigestTest(unittest.TestCase):
             {"INCLUDE_PATHS": "src/**"},
             {"EXCLUDE_PATHS": "*.lock"},
             {"REVIEW_INSTRUCTIONS": "Be strict about money."},
+            # A single review cannot satisfy a request for a full one.
+            {"REVIEW_MODE": "full"},
         ):
             self.assertNotEqual(base, self.digest(**change), change)
+
+    def test_a_full_review_and_a_single_one_are_not_interchangeable(self):
+        self.assertNotEqual(self.digest(REVIEW_MODE="single"), self.digest(REVIEW_MODE="full"))
+        self.assertEqual(self.digest(REVIEW_MODE="FULL"), self.digest(REVIEW_MODE="full"))
+        # `auto` is resolved to one of the two before the digest is taken, so the
+        # digest never carries it.
+        self.assertEqual(self.digest(REVIEW_MODE=""), self.digest(REVIEW_MODE=" "))
 
     def test_a_guidelines_file_counts_by_its_contents(self):
         with tempfile.TemporaryDirectory() as tmp:

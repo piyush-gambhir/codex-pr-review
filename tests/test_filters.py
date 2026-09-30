@@ -191,6 +191,62 @@ class ChangedLinesTest(unittest.TestCase):
             outputs = dict(line.split("=", 1) for line in out.read_text().splitlines())
         self.assertEqual((outputs["changed-lines"], outputs["skip"], outputs["note"]), ("52", "true", ""))
 
+    def test_main_resolves_the_review_mode(self):
+        for review_mode, limit, expected in (("", "", "single"), ("full", "", "full"),
+                                             ("auto", "10", "full"), ("auto", "1000", "single"),
+                                             ("auto", "", "single")):
+            with tempfile.TemporaryDirectory() as out_dir:
+                out = pathlib.Path(out_dir, "output")
+                env = {"GITHUB_OUTPUT": str(out), "BASE_REF": "main",
+                       "MAX_CHANGED_LINES": limit, "REVIEW_MODE": review_mode}
+                cwd = os.getcwd()
+                try:
+                    os.chdir(self.repo)
+                    with mock.patch.dict(os.environ, env, clear=True):
+                        self.assertEqual(filters.main(), 0)
+                finally:
+                    os.chdir(cwd)
+                outputs = dict(line.split("=", 1) for line in out.read_text().splitlines())
+            self.assertEqual(outputs["review-mode"], expected, (review_mode, limit))
+
+
+class ReviewModeTest(unittest.TestCase):
+    """`single`, `full` or `auto`, and the `large-pr: full` way of saying `auto`."""
+
+    def test_the_input_is_checked(self):
+        self.assertEqual(filters.parse_review_mode(""), "single")
+        self.assertEqual(filters.parse_review_mode(" FULL "), "full")
+        self.assertEqual(filters.parse_review_mode("auto"), "auto")
+        with self.assertRaises(SystemExit):
+            filters.parse_review_mode("everything")
+
+    def test_asking_for_full_needs_no_size(self):
+        self.assertEqual(filters.resolve_review_mode("full", "warn", 3, None), "full")
+        self.assertEqual(filters.resolve_review_mode("full", "warn", 3, 10_000), "full")
+
+    def test_auto_goes_full_over_the_limit(self):
+        self.assertEqual(filters.resolve_review_mode("auto", "warn", 5_000, 3_000), "full")
+        self.assertEqual(filters.resolve_review_mode("auto", "warn", 2_000, 3_000), "single")
+        # Exactly at the limit is not over it.
+        self.assertEqual(filters.resolve_review_mode("auto", "warn", 3_000, 3_000), "single")
+
+    def test_auto_without_a_limit_has_no_size_to_be_over(self):
+        self.assertEqual(filters.resolve_review_mode("auto", "warn", 99_000, None), "single")
+
+    def test_large_pr_full_says_the_same_thing_from_the_guards_side(self):
+        self.assertEqual(filters.resolve_review_mode("single", "full", 5_000, 3_000), "full")
+        self.assertEqual(filters.resolve_review_mode("single", "full", 1_000, 3_000), "single")
+        self.assertEqual(filters.parse_mode("full"), "full")
+
+    def test_large_pr_full_reviews_rather_than_skipping_or_warning(self):
+        self.assertEqual(filters.guard_decision(5_000, 3_000, "full"), (False, ""))
+        self.assertEqual(filters.guard_decision(5_000, 3_000, "skip")[0], True)
+        self.assertIn("may be incomplete", filters.guard_decision(5_000, 3_000, "warn")[1])
+
+    def test_an_unknown_large_pr_value_is_still_refused(self):
+        with self.assertRaises(SystemExit):
+            filters.parse_mode("shard")
+
 
 if __name__ == "__main__":
     unittest.main()
