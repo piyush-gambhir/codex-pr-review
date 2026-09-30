@@ -32,6 +32,9 @@ import subprocess
 import sys
 import urllib.error
 
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import filters  # noqa: E402
+
 STATE_PREFIX = "<!-- codex-pr-review-state "
 STATE_RE = re.compile(re.escape(STATE_PREFIX) + r"(\{.*?\})\s*-->", re.DOTALL)
 FINDING_PREFIX = "<!-- codex-pr-review-finding "
@@ -86,11 +89,60 @@ def entry(finding: dict) -> dict:
     }
 
 
-def state_marker(head_sha: str, findings: list, carried: list | None = None) -> str:
+def state_marker(head_sha: str, findings: list, carried: list | None = None, config: str = "") -> str:
     """The hidden state to append to a posted body."""
     entries = [entry(f) for f in findings] + list(carried or [])
     payload = {"v": 1, "sha": head_sha, "findings": entries}
+    if config:
+        # What the review was produced with, so the next run can tell whether
+        # asking again could say anything new (see rereview.py).
+        payload["cfg"] = config
     return STATE_PREFIX + json.dumps(payload, separators=(",", ":")) + " -->"
+
+
+# The settings that decide what a review says. Everything else (the heading, the
+# re-run hint, the sandbox, how the findings are rendered) can change without
+# making the same commit worth reviewing again.
+SETTINGS = (
+    ("provider", "PROVIDER", "lower"),
+    ("model", "MODEL", ""),
+    ("effort", "REASONING_EFFORT", "lower"),
+    ("base", "BASE_REF", ""),
+    ("incremental", "INCREMENTAL", "lower"),
+    ("suggestions", "SUGGESTIONS", "lower"),
+    ("max-priority", "MAX_PRIORITY", "upper"),
+    ("post-mode", "POST_MODE", "lower"),
+)
+
+
+def settings_digest(env: dict) -> str:
+    """Fingerprint of the settings a review was produced with.
+
+    Pattern lists are sorted, so reordering `exclude-paths` is not a change, and
+    the instructions go in as a digest of their text, whether they came from the
+    input or from a file.
+    """
+    parts = []
+    for name, variable, case in SETTINGS:
+        value = (env.get(variable) or "").strip()
+        value = value.lower() if case == "lower" else value.upper() if case == "upper" else value
+        parts.append(f"{name}={value}")
+    for name, variable in (("include", "INCLUDE_PATHS"), ("exclude", "EXCLUDE_PATHS")):
+        parts.append(f"{name}=" + ",".join(sorted(filters.parse_patterns(env.get(variable, "")))))
+    parts.append("instructions=" + hashlib.sha1(instructions(env).encode("utf-8")).hexdigest())
+    return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()[:12]
+
+
+def instructions(env: dict) -> str:
+    """The review guidelines this run uses, inline ones and the file together."""
+    import write_config  # noqa: E402  (only needed here, and it imports filters)
+
+    try:
+        return write_config.load_instructions(env)
+    except SystemExit:
+        # A configured file that is not there: a real difference from any run
+        # that could read it, and write_config.py fails the run in a moment.
+        return "\x00review-instructions-file-missing"
 
 
 def finding_marker(fp: str) -> str:
@@ -129,23 +181,32 @@ def paginate(path: str, token: str, call) -> list:
         page += 1
 
 
-def latest_state(repo: str, pr: str, token: str, call) -> dict:
-    """State from the most recent earlier Codex review or comment on the PR."""
-    bodies = []
-    for path in (f"/repos/{repo}/issues/{pr}/comments", f"/repos/{repo}/pulls/{pr}/reviews"):
-        try:
-            bodies.extend(paginate(path, token, call))
-        except (urllib.error.URLError, OSError) as error:
-            print(f"::warning::Could not read earlier Codex reviews ({error}).")
+def latest_state(repo: str, pr: str, token: str, call, items: list | None = None) -> dict:
+    """State from the most recent earlier Codex review or comment on the PR.
+
+    `items` are comment and review bodies already in hand (see pr_state.py), so
+    the conversation is listed once per run instead of once per reader.
+    """
+    bodies = list(items) if items is not None else []
+    if items is None:
+        for path in (f"/repos/{repo}/issues/{pr}/comments", f"/repos/{repo}/pulls/{pr}/reviews"):
+            try:
+                bodies.extend(paginate(path, token, call))
+            except (urllib.error.URLError, OSError) as error:
+                print(f"::warning::Could not read earlier Codex reviews ({error}).")
     dated = []
     for item in bodies:
         state = parse_state(item.get("body") or "")
         if state:
-            dated.append((item.get("submitted_at") or item.get("created_at") or "", state))
+            dated.append((item.get("submitted_at") or item.get("created_at") or "", state,
+                          item.get("html_url") or ""))
     if not dated:
         return {}
-    dated.sort(key=lambda pair: pair[0])
-    return dated[-1][1]
+    dated.sort(key=lambda found: found[0])
+    state = dict(dated[-1][1])
+    if dated[-1][2]:
+        state["url"] = dated[-1][2]  # where to send a reader who asks again
+    return state
 
 
 # Classification --------------------------------------------------------------
@@ -266,15 +327,21 @@ def review_threads(repo: str, pr: str, token: str, call, graphql: str) -> list:
         cursor = info.get("endCursor")
 
 
-def resolve_threads(repo: str, pr: str, token: str, fingerprints: set, call, graphql: str) -> int:
-    """Resolve the threads of findings that are fixed. Best effort, never fatal."""
+def resolve_threads(repo: str, pr: str, token: str, fingerprints: set, call, graphql: str,
+                    threads: list | None = None) -> int:
+    """Resolve the threads of findings that are fixed. Best effort, never fatal.
+
+    `threads` are the (thread id, fingerprint) pairs already read for this run
+    (see pr_state.py); without them they are listed here.
+    """
     if not fingerprints:
         return 0
-    try:
-        threads = review_threads(repo, pr, token, call, graphql)
-    except (urllib.error.URLError, OSError, KeyError, ValueError) as error:
-        print(f"::warning::Could not list review threads ({error}).")
-        return 0
+    if threads is None:
+        try:
+            threads = review_threads(repo, pr, token, call, graphql)
+        except (urllib.error.URLError, OSError, KeyError, ValueError) as error:
+            print(f"::warning::Could not list review threads ({error}).")
+            return 0
     resolved = 0
     for thread_id, fp in threads:
         if fp not in fingerprints:
@@ -329,11 +396,11 @@ def load_plan(path: str) -> dict:
     return plan if isinstance(plan, dict) else {}
 
 
-def plan(env: dict, call) -> dict:
+def plan(env: dict, call, bundle: dict | None = None) -> dict:
     """Read the last review's state and work out what this run should review."""
     repo, pr, token = env["GITHUB_REPOSITORY"], env["PR_NUMBER"], env.get("GH_TOKEN", "")
     head_sha, base_ref = env.get("HEAD_SHA", ""), env.get("BASE_REF", "")
-    previous = latest_state(repo, pr, token, call)
+    previous = latest_state(repo, pr, token, call, (bundle or {}).get("items"))
     result = {"previous": previous, "incremental": False, "base": base_ref, "note": ""}
     count = len(previous.get("findings") or []) if previous else 0
     print(f"Previous Codex state: {'none' if not previous else short(previous.get('sha', '')) + f', {count} finding(s)'}")
@@ -348,10 +415,18 @@ def main(action: str) -> int:
     if action != "plan":
         print(f"::error::Unknown history action '{action}'.")
         return 1
-    from publish_review import github  # noqa: E402  (imported here: publish_review imports this module)
+    from publish_review import GRAPHQL, github  # noqa: E402  (imported here: publish_review imports this module)
+    import pr_state  # noqa: E402  (imports publish_review, so not at module level)
 
     env = os.environ
-    result = plan(dict(env), github)
+    repo, pr = env["GITHUB_REPOSITORY"], env["PR_NUMBER"]
+    # One read of the conversation for the whole run: the state marker below, the
+    # comments publish_review.py collapses, and the threads it resolves.
+    bundle = pr_state.fetch(repo, pr, env.get("GH_TOKEN", ""), github, GRAPHQL)
+    result = plan(dict(env), github, bundle)
+    if bundle:
+        result["hide"] = bundle["hide"]
+        result["threads"] = bundle["threads"]
     state_file = env.get("STATE_FILE", "")
     if state_file:
         pathlib.Path(state_file).write_text(json.dumps(result), encoding="utf-8")

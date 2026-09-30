@@ -12,6 +12,7 @@ name: Codex PR Review
 #   @gpt review high             more reasoning for this request
 #   @gpt review bedrock          run on Amazon Bedrock this time
 #   @gpt review openai xhigh     provider and effort together
+#   @gpt review force            review this commit again even if it has a review
 #
 # The command must start the comment. Nothing runs on open or push.
 # Defaults come from repository variables CODEX_REVIEW_PROVIDER (openai) and
@@ -51,6 +52,7 @@ jobs:
       head-sha: ${{ steps.check.outputs.head-sha }}
       provider: ${{ steps.check.outputs.provider }}
       effort: ${{ steps.check.outputs.effort }}
+      force: ${{ steps.check.outputs.force }}
     steps:
       - name: Parse the request and check the PR
         id: check
@@ -65,15 +67,18 @@ jobs:
             const base = process.env.BASE_BRANCH;
             core.setOutput('run', 'false');
 
-            // Words after "@gpt review" on the first line choose provider and effort.
+            // Words after "@gpt review" on the first line choose provider, effort
+            // and whether to review a commit that already has a review.
             const providers = ['openai', 'bedrock'];
             const efforts = ['low', 'medium', 'high', 'xhigh'];
             let provider = process.env.DEFAULT_PROVIDER;
             let effort = process.env.DEFAULT_EFFORT;
+            let force = false;
             const words = context.payload.comment.body.split('\n')[0].trim().split(/\s+/).slice(2);
             for (const word of words.map((w) => w.toLowerCase())) {
               if (providers.includes(word)) provider = word;
               else if (efforts.includes(word)) effort = word;
+              else if (word === 'force') force = true;
               else {
                 core.notice(`Ignoring unknown option '${word}'.`);
               }
@@ -113,6 +118,7 @@ jobs:
             core.setOutput('head-sha', pr.head.sha);
             core.setOutput('provider', provider);
             core.setOutput('effort', effort);
+            core.setOutput('force', force ? 'true' : 'false');
 
             // Acknowledge the request; best effort only.
             try {
@@ -128,10 +134,14 @@ jobs:
     needs: gate
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-24.04
+    # The model call is the only slow step, and it is billed for as long as it runs.
     timeout-minutes: 30
+    # One review at a time per pull request, and a newer request cancels the one
+    # in flight: that review is already out of date and still costing money. The
+    # cancelled run removes its own progress note and leaves no failure note.
     concurrency:
       group: codex-review-${{ github.event.issue.number }}
-      cancel-in-progress: false
+      cancel-in-progress: true
     permissions:
       contents: read
       pull-requests: write # post the review
@@ -159,6 +169,9 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
+      # fetch-depth: 0 with no credentials left behind. A `filter: blob:none`
+      # partial clone is much cheaper but fetches blobs lazily, which needs a
+      # credential in the checkout Codex reads: see "Checkout cost" in the README.
       - name: Checkout PR head
         uses: actions/checkout@v7
         with:
@@ -181,7 +194,8 @@ jobs:
           head-sha: ${{ needs.gate.outputs.head-sha }}
           github-token: ${{ steps.app.outputs.token || github.token }}
           trigger-comment-id: ${{ github.event.comment.id }}
-          rerun-hint: "Re-run: `@gpt review` \u00b7 deeper: `@gpt review high` \u00b7 on Bedrock: `@gpt review bedrock`"
+          force: ${{ needs.gate.outputs.force }}
+          rerun-hint: "Re-run: `@gpt review` \u00b7 same commit again: `@gpt review force` \u00b7 deeper: `@gpt review high` \u00b7 on Bedrock: `@gpt review bedrock`"
           # Optional: repository-specific guidelines (file may not exist).
           review-instructions-file: ${{ hashFiles('trusted/.github/codex-review.md') != '' && 'trusted/.github/codex-review.md' || '' }}
           max-priority: P3

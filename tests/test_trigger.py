@@ -15,8 +15,9 @@ ENV = {"GITHUB_REPOSITORY": "o/r", "GITHUB_ACTOR": "dev", "GH_TOKEN": "t",
 HEAD = "b" * 40
 
 
-def pull_request(number=7, state="open", base="main", head_repo="o/r"):
-    return {"number": number, "state": state, "base": {"ref": base},
+def pull_request(number=7, state="open", base="main", head_repo="o/r", default_branch="main"):
+    return {"number": number, "state": state,
+            "base": {"ref": base, "repo": {"default_branch": default_branch}},
             "head": {"sha": HEAD, "repo": {"full_name": head_repo}}}
 
 
@@ -159,7 +160,37 @@ class TriggerTest(unittest.TestCase):
     def test_empty_base_branches_falls_back_to_the_default_branch(self):
         out, calls = self.run_trigger("issue_comment", comment_event(), BASE_BRANCHES="")
         self.assertEqual(out["run"], "true")
+        # The pull request payload already names it, so the repository is not fetched.
+        self.assertNotIn("/repos/o/r", self.paths(calls, "GET"))
+
+    def test_a_payload_without_a_default_branch_still_asks(self):
+        pr = pull_request()
+        pr["base"].pop("repo")
+        out, calls = self.run_trigger("issue_comment", comment_event(), pr=pr, BASE_BRANCHES="")
+        self.assertEqual(out["run"], "true")
         self.assertIn("/repos/o/r", self.paths(calls, "GET"))
+
+    # force -------------------------------------------------------------------
+
+    def test_force_asks_for_a_fresh_review(self):
+        out, _ = self.run_trigger("issue_comment", comment_event("@gpt review force"))
+        self.assertEqual((out["run"], out["force"]), ("true", "true"))
+        out, _ = self.run_trigger("issue_comment", comment_event("@gpt review bedrock high FORCE"))
+        self.assertEqual((out["provider"], out["effort"], out["force"]), ("bedrock", "high", "true"))
+
+    def test_without_the_word_nothing_is_forced(self):
+        out, _ = self.run_trigger("issue_comment", comment_event())
+        self.assertEqual(out["force"], "false")
+
+    def test_the_input_forces_triggers_that_carry_no_words(self):
+        out, _ = self.run_trigger("pull_request", label_event(), FORCE="true")
+        self.assertEqual((out["run"], out["force"]), ("true", "true"))
+        out, _ = self.run_trigger("workflow_dispatch", {}, PR_NUMBER="7", FORCE="true")
+        self.assertEqual((out["run"], out["force"]), ("true", "true"))
+
+    def test_a_declined_request_is_never_forced(self):
+        out, _ = self.run_trigger("issue_comment", comment_event("@gpt review force"), permission="read")
+        self.assertEqual((out["run"], out["force"]), ("false", "false"))
 
     # pull_request labelled ---------------------------------------------------
 

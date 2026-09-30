@@ -2,6 +2,23 @@
 
 This project follows [semantic versioning](https://semver.org). The `v1` tag always points to the latest 1.x release; breaking input or output changes get a new major version.
 
+## Unreleased
+
+Faster and cheaper reviews, with no change to what a review says.
+
+### Added
+
+- **The same commit is not reviewed twice.** Every posted review's state marker now carries a digest of the settings that produced it (provider, model, effort, base ref, guidelines, path filters, priority cut-off, post mode), so a request for a commit that already has a matching review posts a short note linking to it and calls no model. New inputs `skip-unchanged` (default `true`) and `force`; `@gpt review force` in a comment, a `force` input on the trigger action and the reusable workflow, and a `force` output on the trigger. New outputs `skipped`, `skip-reason` and `existing-review-url`. Nothing is installed or posted before the decision, and anything that could change the answer stops the skip, including a marker written before this release.
+- **The Codex CLI is cached** with `actions/cache/restore@v6` and `actions/cache/save@v6` (saved as soon as the install exists, so a failed or cancelled review still leaves the cache warm), keyed on the runner's OS and architecture, the resolved Codex version and the pnpm major, restoring `RUNNER_TEMP/codex-cli` (install scripts stay disabled). With a pinned `codex-version` the key is known before anything is set up, so a warm cache skips `actions/setup-node`, `pnpm/action-setup` and the install: about 14 s of install work becomes about 2 s on `ubuntu-24.04`. `codex-version: latest` is resolved with pnpm first, so the key always names the version that gets installed; an unresolvable version leaves the cache out of that run rather than risking the wrong one. A restored install is used only when it runs and reports that version. New input `cache-install` (default `true`).
+- **`actions/setup-node` and `pnpm/action-setup` are skipped when the runner already has what the install needs**: `node-version: ''` as before, and now an open request such as `lts/*` that the runner's Node already satisfies. pnpm is only kept when Node is kept too.
+
+### Changed
+
+- **A newer request cancels the review in flight.** The reusable workflow and the standalone example set `cancel-in-progress: true` on the per-pull-request concurrency group. A cancelled run removes its own progress note and posts no failure note.
+- **One read of the pull request per run instead of four.** The state marker, the comments to collapse and the threads to resolve now come from a single GraphQL query ([`scripts/pr_state.py`](scripts/pr_state.py)) and travel to the later steps in the plan file: six conversation listings per run become two. REST remains the fallback for an old GitHub Enterprise Server, a token GraphQL refuses, or a conversation longer than one page. The trigger also takes the default branch from the pull request payload instead of fetching the repository.
+- The previous review is read before the progress note is posted, so a run never lists its own note.
+- `fetch-depth: 0` stays, with the reasons documented under "Checkout cost" in the README: a `filter: blob:none` partial clone is much cheaper but fetches blobs lazily, and `git diff` against the merge base then fails once `persist-credentials: false` has removed the credential.
+
 ## v1.2.1 (2026-09-30)
 
 ### Removed

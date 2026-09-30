@@ -76,8 +76,9 @@ Comment `@gpt review` on a pull request. About a minute later you get a review w
    | `@gpt review high` | Deeper reasoning (`low`, `medium`, `high`, `xhigh`) |
    | `@gpt review bedrock` | Use Amazon Bedrock for this request |
    | `@gpt review bedrock xhigh` | Both |
+   | `@gpt review force` | Review a commit that already has a review |
 
-Only open, same-repository PRs into `base-branches`, requested by someone with write access, are reviewed, one review at a time per PR. Nothing runs on open or push, so you only pay for reviews someone asks for.
+Only open, same-repository PRs into `base-branches`, requested by someone with write access, are reviewed, one review at a time per PR. Nothing runs on open or push, so you only pay for reviews someone asks for. Asking twice for the same commit does not pay twice: the second request finds the review that is already there and says so (see [Not paying twice](#not-paying-twice)).
 
 [`examples/codex-review.yml`](examples/codex-review.yml) is this file with the manual trigger and the optional settings filled in. If you would rather see every step (or you are on GitHub Enterprise Server, where the reusable workflow does not work), copy [`examples/codex-review-standalone.yml`](examples/codex-review-standalone.yml) instead: same behaviour, all of it in your repository.
 
@@ -87,7 +88,7 @@ Three ways to ask for a review, all handled by the same gate:
 
 | Trigger | How | Notes |
 |---|---|---|
-| Comment | `@gpt review [openai\|bedrock] [low\|medium\|high\|xhigh]` at the start of a PR comment | Options come from the first line; the comment gets 👀, then 🚀 or 😕 |
+| Comment | `@gpt review [openai\|bedrock] [low\|medium\|high\|xhigh] [force]` at the start of a PR comment | Options come from the first line; the comment gets 👀, then 🚀 or 😕 |
 | Label | Add the `codex-review` label to the PR | The label is removed again, so re-adding it re-runs the review. Set `label: ""` to switch this off |
 | Manual | Actions tab → the workflow → **Run workflow** → PR number | Add a `workflow_dispatch` input named `pr-number` and pass it through as `pr-number` |
 
@@ -101,6 +102,8 @@ Everything is optional. `base-branches` defaults to your repository's default br
 |---|---|---|
 | `base-branches` | default branch | Comma-separated base branches that may be reviewed |
 | `command` | `@gpt review` | Comment prefix that requests a review |
+| `skip-unchanged` | `true` | Skip a re-review of a commit that already has one with the same settings |
+| `force` | `false` | Make label and manual runs review even when nothing changed |
 | `label` | `codex-review` | Label that requests a review; empty turns label triggers off |
 | `remove-label` | `true` | Remove the label again, so it can be re-added to re-run |
 | `default-provider` | `openai` | Provider when the request does not name one |
@@ -129,7 +132,7 @@ To keep your own review job and only reuse the gate, use the trigger action on i
     label: codex-review
 ```
 
-It outputs `run` (`true` or `false`), `pr-number`, `head-sha`, `base-ref` (already `origin/`-prefixed), `provider`, `effort`, `comment-id` and `reason` (why no review runs, e.g. `no-command`, `no-write-access`, `fork`, `base-branch-not-allowed`). It needs `pull-requests: write` and `issues: write` to react, reply and remove the label.
+It outputs `run` (`true` or `false`), `pr-number`, `head-sha`, `base-ref` (already `origin/`-prefixed), `provider`, `effort`, `force`, `comment-id` and `reason` (why no review runs, e.g. `no-command`, `no-write-access`, `fork`, `base-branch-not-allowed`). It needs `pull-requests: write` and `issues: write` to react, reply and remove the label.
 
 > **How the reusable workflow finds its own action.** `github.workflow_ref` and `github.workflow_sha` describe the *caller*, and `./` resolves against the caller's checkout, so neither can name the action version that belongs with the workflow. Each job instead checks out `job.workflow_repository` at `job.workflow_sha` (the workflow file defining the running job, which is this workflow) and uses the action from that checkout. So `@v1.1.0` of the workflow runs v1.1.0 of the action, a full-SHA pin runs that SHA, and a private copy of this repository uses itself. The trade-off: [`job.workflow_*`](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#job-context) does not exist on GitHub Enterprise Server, so use the standalone example there.
 
@@ -154,13 +157,35 @@ You can also pass rules inline with `review-instructions`.
 
 ### Re-reviews
 
-Every posted review carries a hidden state marker with the reviewed commit and a fingerprint per finding (the path plus the meaningful words of the title, so it survives line shifts and small rewordings). The next review reads the most recent marker on the pull request and uses it to:
+Every posted review carries a hidden state marker with the reviewed commit, a digest of the settings that produced it, and a fingerprint per finding (the path plus the meaningful words of the title, so it survives line shifts and small rewordings). The next review reads the most recent marker on the pull request and uses it to:
 
+- skip the review entirely when the commit and the settings are the same ones (see [Not paying twice](#not-paying-twice));
 - list what is gone under **Resolved since last review** (collapsed once it gets long) and count it in the verdict line, e.g. `2 issues to address (2 P1) · 3 resolved`;
 - tag findings reported again as **still open** in the issues table;
 - resolve the inline threads of fixed findings, so only live feedback is left open. Turn that off with `resolve-fixed-threads: false`.
 
 With `incremental: true` a re-review looks only at the commits pushed since the last review (`--base <previous sha>`), which is faster and cheaper on long-running PRs; the meta line then says `Incremental: abc1234..def5678`. Findings in files those commits didn't touch are not re-checked, so they are carried forward as **still open, not re-checked** rather than counted as fixed. If the previous commit is no longer in the branch's history (a force-push), the run falls back to a full review and says so.
+
+### Not paying twice
+
+A review costs a model call and about a minute. Three things make sure you only pay when there is something to pay for.
+
+**The same commit is not reviewed twice.** Every posted review's state marker carries a digest of the settings that produced it: provider, model, effort, base ref, guidelines, path filters, priority cut-off and post mode. When a request arrives for a commit that already has a review with the same digest, nothing is installed and no model is called; a short note goes up linking to the review that is already there. Ask again with `force` (`@gpt review force`) to review it anyway, or set `skip-unchanged: false` to turn it off. Anything that could change the answer stops the skip on its own, including a marker written before this feature existed. The `skipped`, `skip-reason` and `existing-review-url` outputs say what happened.
+
+**A newer request cancels the one in flight.** The review job's concurrency group is per pull request with `cancel-in-progress: true`, so pushing a fix and asking again does not leave the first review running against the old commit. The cancelled run removes its own progress note and posts no failure note; the run that replaced it posts its own.
+
+**The reviewer is installed once per runner, not once per run.** The Codex CLI is about 300 MB unpacked, so it is cached with `actions/cache`, keyed on the runner's OS and architecture, the Codex version and the pnpm major. With the pinned `codex-version` the key is known before anything is set up, so a warm cache skips `actions/setup-node`, `pnpm/action-setup` and the install itself: measured on `ubuntu-24.04`, the install path goes from about 14 s to about 2 s. With `codex-version: latest` the version is resolved first (pnpm's own resolution, because its minimum release age means `latest` is usually not the newest release), so the key always names the version that gets installed; if it cannot be resolved the cache sits that run out rather than risk restoring the wrong version. A restored install is only used when it runs and reports the version asked for. Install scripts stay disabled either way. `cache-install: false` turns it off, for runners with no cache service.
+
+### Checkout cost
+
+The review diffs against the merge base with the base branch, so the PR is checked out with `fetch-depth: 0` and `persist-credentials: false`. Those two together are the reason the checkout is not cheaper:
+
+- A `filter: blob:none` partial clone is much cheaper to fetch (on a repository with a few thousand commits: 3.6 s and 4.4 MB against 9.0 s and 81 MB) but it fetches file contents lazily from the remote. With no credential left in the checkout, `git diff` between the merge base and HEAD fails outright on a private repository (`could not fetch <oid> from promisor remote`), which breaks both the size guard and the review. Keeping a credential there would put a token in the checkout Codex reads, which is exactly what `persist-credentials: false` is for. Not adopted.
+- A shallow checkout plus a targeted `git fetch --deepen` for the base branch needs a credential for that fetch, for the same reason. Not adopted.
+
+So `fetch-depth: 0` stays. On a very large repository, the honest options are a runner with a warm local mirror, or `max-changed-lines` with `large-pr: skip` so oversized pull requests cost one `git diff` and nothing else.
+
+Two more things worth setting in your own workflow: `timeout-minutes` on the review job (the example uses 30; the model call is the only slow step and it is billed for as long as it runs), and nothing on `push` or `pull_request` triggers, so a review only happens when someone asks.
 
 ### Paths
 
@@ -314,6 +339,8 @@ The workflow mints an app token with `actions/create-github-app-token` and passe
 | `fail-on-priority` | | Fail the step when a finding at this priority or higher is reported |
 | `resolve-fixed-threads` | `true` | Resolve the inline threads of findings no longer reported |
 | `incremental` | `false` | Review only the commits pushed since the last Codex review |
+| `skip-unchanged` | `true` | Skip the review when this commit already has one with the same settings |
+| `force` | `false` | Review anyway, whatever `skip-unchanged` would have decided |
 | **Output** | | |
 | `post-mode` | `review` | `review`, `comment` or `none` |
 | `hide-previous` | `true` | Collapse earlier Codex comments as outdated |
@@ -329,8 +356,9 @@ The workflow mints an app token with `actions/create-github-app-token` and passe
 | `sandbox` | `read-only` | Codex sandbox for commands it runs while reviewing |
 | `codex-config` | | Extra raw TOML for Codex's `config.toml` |
 | `codex-version` | `0.159.2` | Codex CLI version to install: a pinned version for reproducible reviews, or `latest` (the newest release older than pnpm's minimum release age, a supply-chain safety delay) |
-| `node-version` | `lts/*` | Node.js set up with `actions/setup-node` for installing and running Codex; empty keeps the runner's Node |
-| `pnpm-version` | `12` | pnpm set up with `pnpm/action-setup` to install Codex |
+| `node-version` | `lts/*` | Node.js set up with `actions/setup-node` for installing and running Codex; empty keeps the runner's Node, and an open request such as `lts/*` is skipped when the runner's Node already satisfies it |
+| `pnpm-version` | `12` | pnpm set up with `pnpm/action-setup` to install Codex; skipped when the CLI is already there |
+| `cache-install` | `true` | Cache the installed Codex CLI with `actions/cache` (see [Not paying twice](#not-paying-twice)) |
 
 ## Outputs
 
@@ -350,6 +378,9 @@ The workflow mints an app token with `actions/create-github-app-token` and passe
 | `estimated-cost-usd` | Estimated cost in US dollars; empty for a model with no known price |
 | `sarif-file` | The SARIF file, when `sarif-file` was set |
 | `check-run-id` | The check run, when `check-run` is enabled |
+| `skipped` | `true` when no review ran (too large, or already reviewed) |
+| `skip-reason` | `large-pr`, `already-reviewed`, or empty when a review ran |
+| `existing-review-url` | The review a skipped run pointed at |
 
 ## Models and prices
 
@@ -375,15 +406,16 @@ pricing: '{"my-fine-tune": [2, 0.2, 10]}'
 ## How it works
 
 1. **Size guard**: [`scripts/filters.py`](scripts/filters.py) counts the changed lines between the merge base and HEAD. Over `max-changed-lines` with `large-pr: skip`, a note goes up and the remaining steps are skipped.
-2. **Progress note**: posted on the PR with a link to the run.
-3. **Previous review**: [`scripts/history.py`](scripts/history.py) reads the state marker in the last Codex review on the PR, and with `incremental` checks whether that commit is still an ancestor of the head.
-4. **Install**: Node.js (latest LTS) and pnpm are set up, and the pinned Codex CLI is installed with pnpm into `RUNNER_TEMP` with install scripts disabled.
-5. **Credentials**: for `bedrock`, `aws-actions/configure-aws-credentials` assumes the role via OIDC and returns credentials as step outputs. For `openai`, the key is passed as `CODEX_API_KEY`. Only the review step receives them, and no GitHub token reaches Codex.
-6. **Config**: [`scripts/write_config.py`](scripts/write_config.py) writes Codex's `config.toml`: provider, model, effort, a read-only sandbox, no approvals, your guidelines, and a minimal environment (`shell_environment_policy.inherit = "core"`) so commands Codex runs never see the credentials.
-7. **Review**: `codex exec review --base <base-ref>` reviews the diff against the merge base.
-8. **Usage**: [`scripts/usage.py`](scripts/usage.py) reads the real token counts out of the session rollout Codex wrote in `CODEX_HOME` (review mode reports zero usage on its `turn.completed` event) and estimates the cost from the price table.
-9. **Publish**: [`scripts/publish_review.py`](scripts/publish_review.py) parses the findings and posts the review. If GitHub rejects an inline anchor, everything goes in the body instead. [`scripts/status.py`](scripts/status.py) then clears the progress note, or turns it into a failure note. A failed or empty review never looks like a pass. Fixed findings are listed as resolved and their threads are resolved, best effort.
-10. **Checks and SARIF** (optional): [`scripts/checks.py`](scripts/checks.py) completes the check run with the verdict and the annotations, and [`scripts/sarif.py`](scripts/sarif.py) turns the findings JSON into a SARIF 2.1.0 file. Neither can fail the review.
+2. **Previous review**: [`scripts/history.py`](scripts/history.py) reads the state marker in the last Codex review on the PR, and with `incremental` checks whether that commit is still an ancestor of the head. It runs before anything is posted, so [`scripts/pr_state.py`](scripts/pr_state.py) can read the whole conversation in one GraphQL call and hand the later steps what they need (the comments to collapse, the threads to resolve) instead of listing the pull request again.
+3. **Already reviewed?** [`scripts/rereview.py`](scripts/rereview.py) compares the marker's commit and settings digest with this run's. A match posts a note linking to that review and skips everything below. Nothing has been installed or posted at this point.
+4. **Progress note**: posted on the PR with a link to the run.
+5. **Install**: [`scripts/install_plan.py`](scripts/install_plan.py) works out the cache key, the CLI is restored with `actions/cache`, and Node.js, pnpm and the install itself only happen when the restored CLI is not usable. Installs go into `RUNNER_TEMP` with install scripts disabled.
+6. **Credentials**: for `bedrock`, `aws-actions/configure-aws-credentials` assumes the role via OIDC and returns credentials as step outputs. For `openai`, the key is passed as `CODEX_API_KEY`. Only the review step receives them, and no GitHub token reaches Codex.
+7. **Config**: [`scripts/write_config.py`](scripts/write_config.py) writes Codex's `config.toml`: provider, model, effort, a read-only sandbox, no approvals, your guidelines, and a minimal environment (`shell_environment_policy.inherit = "core"`) so commands Codex runs never see the credentials.
+8. **Review**: `codex exec review --base <base-ref>` reviews the diff against the merge base.
+9. **Usage**: [`scripts/usage.py`](scripts/usage.py) reads the real token counts out of the session rollout Codex wrote in `CODEX_HOME` (review mode reports zero usage on its `turn.completed` event) and estimates the cost from the price table.
+10. **Publish**: [`scripts/publish_review.py`](scripts/publish_review.py) parses the findings and posts the review. If GitHub rejects an inline anchor, everything goes in the body instead. [`scripts/status.py`](scripts/status.py) then clears the progress note, or turns it into a failure note. A failed or empty review never looks like a pass. Fixed findings are listed as resolved and their threads are resolved, best effort.
+11. **Checks and SARIF** (optional): [`scripts/checks.py`](scripts/checks.py) completes the check run with the verdict and the annotations, and [`scripts/sarif.py`](scripts/sarif.py) turns the findings JSON into a SARIF 2.1.0 file. Neither can fail the review.
 
 ## Security
 
@@ -410,6 +442,9 @@ The tests cover:
 - check run conclusions, annotation batching and summary truncation
 - SARIF 2.1.0 structure
 - fingerprints, state round trips, resolved versus still-open classification (full and incremental) and thread matching
+- the settings digest, what does and does not change it, and the skip decision for every case
+- the install plan: the runner probes, exact versus floating versions, lockfile parsing and cache keys
+- how many times a run reads the pull request, with and without the shared read
 
 ## License
 

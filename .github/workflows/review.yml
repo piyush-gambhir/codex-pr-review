@@ -47,6 +47,10 @@ on:
         description: "Comment prefix that requests a review."
         type: string
         default: "@gpt review"
+      skip-unchanged:
+        description: "Skip the review when this commit already has a Codex review with the same settings; a note links to it instead. `@gpt review force` overrides it."
+        type: boolean
+        default: true
       label:
         description: "Label that requests a review when added to a pull request. Empty turns label triggers off."
         type: string
@@ -71,6 +75,10 @@ on:
         description: "Pull request number for `workflow_dispatch` runs; pass the caller's own input through."
         type: string
         default: ""
+      force:
+        description: "Review even when the commit already has one, for triggers that carry no words of their own (a label, a manual run)."
+        type: boolean
+        default: false
       runs-on:
         description: "Runner label, or a JSON array of labels such as `[\"self-hosted\", \"linux\"]`."
         type: string
@@ -139,6 +147,7 @@ jobs:
       base-ref: ${{ steps.trigger.outputs.base-ref }}
       provider: ${{ steps.trigger.outputs.provider }}
       effort: ${{ steps.trigger.outputs.effort }}
+      force: ${{ steps.trigger.outputs.force }}
       comment-id: ${{ steps.trigger.outputs.comment-id }}
       reason: ${{ steps.trigger.outputs.reason }}
     steps:
@@ -163,16 +172,22 @@ jobs:
           default-effort: ${{ inputs.default-effort }}
           allowed-providers: ${{ inputs.allowed-providers }}
           pr-number: ${{ inputs.pr-number }}
+          force: ${{ inputs.force }}
 
   review:
     name: Codex review
     needs: trigger
     if: needs.trigger.outputs.run == 'true'
     runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
+    # A review that has not finished in this long is not going to: the model call
+    # is the only slow step, and it is billed for as long as it runs.
     timeout-minutes: 30
+    # One review at a time per pull request, and a newer request cancels the one
+    # in flight: that review is already out of date and still costing money. The
+    # cancelled run removes its own progress note and leaves no failure note.
     concurrency:
       group: codex-review-${{ needs.trigger.outputs.pr-number }}
-      cancel-in-progress: false
+      cancel-in-progress: true
     permissions:
       contents: read
       pull-requests: write # post the review
@@ -208,6 +223,9 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
+      # fetch-depth: 0 with no credentials left behind. A `filter: blob:none`
+      # partial clone is much cheaper but fetches blobs lazily, which needs a
+      # credential in the checkout Codex reads: see "Checkout cost" in the README.
       - name: Checkout PR head
         uses: actions/checkout@v7
         with:
@@ -232,7 +250,9 @@ jobs:
           head-sha: ${{ needs.trigger.outputs.head-sha }}
           github-token: ${{ steps.app.outputs.token || github.token }}
           trigger-comment-id: ${{ needs.trigger.outputs.comment-id }}
-          rerun-hint: "Re-run: `${{ inputs.command }}` \u00b7 deeper: `${{ inputs.command }} high` \u00b7 on Bedrock: `${{ inputs.command }} bedrock`"
+          skip-unchanged: ${{ inputs.skip-unchanged }}
+          force: ${{ needs.trigger.outputs.force }}
+          rerun-hint: "Re-run: `${{ inputs.command }}` \u00b7 same commit again: `${{ inputs.command }} force` \u00b7 deeper: `${{ inputs.command }} high` \u00b7 on Bedrock: `${{ inputs.command }} bedrock`"
           # Guidelines are optional: the file may not exist in the caller's repo.
           review-instructions-file: ${{ inputs.guidelines-path != '' && hashFiles(format('trusted/{0}', inputs.guidelines-path)) != '' && format('trusted/{0}', inputs.guidelines-path) || '' }}
           max-priority: ${{ inputs.max-priority }}
