@@ -2,7 +2,7 @@
 
 This project follows [semantic versioning](https://semver.org). The `v1` tag always points to the latest 1.x release; breaking input or output changes get a new major version.
 
-## Unreleased
+## v1.4.0 (2026-09-30)
 
 Reviews that cover the whole pull request, say how much of it they read, and answer whether to merge it.
 
@@ -32,6 +32,13 @@ Reviews that cover the whole pull request, say how much of it they read, and ans
 - The check run's conclusion follows the verdict: `success` only for a `ready` or `nits` verdict at `high` confidence, `failure` for `blocked` or either gate, `neutral` otherwise. A partial review can no longer turn a required check green, which the old "no findings is a pass" rule allowed.
 - The "already reviewed" note repeats the verdict the review it points at reached.
 - The review job in the reusable workflow and both examples now ask for `issues: write`, for the label.
+
+### Fixed
+
+- A merge left two `COVERAGE_FILE` keys in one step; GitHub rejects duplicate keys, so a test now loads every action, workflow and example with a strict loader.
+- A pass with no findings no longer leaks Codex's "Full review comments: None." into a full review's merged summary; the summary leads with what each area found.
+- Re-review matching also recognises a finding at the same place in the same file, in a second round after title matches, and folds older rewordings of one bug into it, so findings aren't counted twice.
+- No changed files in scope (after path filters) is high confidence, not a partial review.
 
 ## v1.3.0 (2026-09-30)
 
