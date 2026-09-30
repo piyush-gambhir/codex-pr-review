@@ -720,8 +720,8 @@ runs:
         SUMMARY_FILE: ${{ runner.temp }}/codex-review-summary.md
         # The merge verdict, health score and confidence, for the check run below.
         HEALTH_FILE: ${{ runner.temp }}/codex-review-health.json
-        # How much of the pull request was actually reviewed, when a pass wrote
-        # a coverage report; without one the size guard below decides.
+        # How much of the pull request was actually reviewed: shown in the meta
+        # line, and it sets the confidence (without a report, the size guard below).
         COVERAGE_FILE: ${{ runner.temp }}/codex-review-coverage.json
         CHANGED_LINES: ${{ steps.guard.outputs.changed-lines }}
         MAX_CHANGED_LINES: ${{ inputs.max-changed-lines }}
@@ -733,8 +733,6 @@ runs:
         INCLUDE_PATHS: ${{ inputs.include-paths }}
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
         SIZE_NOTE: ${{ steps.guard.outputs.note }}
-        # What the review actually covered, shown in the meta line under it.
-        COVERAGE_FILE: ${{ runner.temp }}/codex-review-coverage.json
         ICONS: ${{ inputs.icons }}
         ICON_BASE_URL: ${{ inputs.icon-base-url }}
         # The settings digest the posted review carries, so the next run can tell
