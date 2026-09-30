@@ -95,7 +95,7 @@ Three ways to ask for a review, all handled by the same gate:
 
 | Trigger | How | Notes |
 |---|---|---|
-| Comment | `@gpt review [openai\|bedrock] [low\|medium\|high\|xhigh] [force]` at the start of a PR comment | Options come from the first line; the comment gets 👀, then 🚀 or 😕 |
+| Comment | `@gpt review [openai\|bedrock] [low\|medium\|high\|xhigh] [force]` at the start of a PR comment | Options come from the first line; the comment gets an eyes reaction, then rocket (answered) or confused (failed) |
 | Label | Add the `codex-review` label to the PR | The label is removed again, so re-adding it re-runs the review. Set `label: ""` to switch this off |
 | Manual | Actions tab, the workflow, **Run workflow**, then the PR number | Add a `workflow_dispatch` input named `pr-number` and pass it through as `pr-number` |
 
