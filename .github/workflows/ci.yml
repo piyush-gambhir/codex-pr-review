@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -34,13 +35,28 @@ jobs:
   # Runs the action for real up to the model call: size guard, Node and pnpm
   # setup, the Codex install and config. A dummy key makes the review itself
   # fail, which is expected; the checks below prove everything before it works
-  # on a real runner.
+  # on a real runner. Then it throws the install away and runs the action again,
+  # which proves the install cache: the second run restores it instead of
+  # downloading the CLI, and both durations are printed.
   action-smoke:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Work out the cache key the action will use
+        id: key
+        run: |
+          set -eu
+          version="$(awk '/^  codex-version:/{f=1} f && /^    default:/{gsub(/"/, "", $2); print $2; exit}' action.yml)"
+          pnpm_version="$(awk '/^  pnpm-version:/{f=1} f && /^    default:/{gsub(/"/, "", $2); print $2; exit}' action.yml)"
+          echo "Codex $version, pnpm $pnpm_version"
+          CODEX_VERSION="$version" PNPM_VERSION="$pnpm_version" python3 scripts/install_plan.py key
+
+      - name: Start the clock
+        run: echo "FIRST_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Run the action with a dummy key
         id: smoke
         continue-on-error: true
@@ -52,16 +68,55 @@ jobs:
           pr-number: "0"
           head-sha: ${{ github.sha }}
           post-mode: none
+
       - name: Check the install and the expected failure
         env:
           OUTCOME: ${{ steps.smoke.outcome }}
         run: |
           set -eu
+          echo "first run: $(( $(date +%s) - FIRST_START ))s"
           codex="$RUNNER_TEMP/codex-cli/node_modules/.bin/codex"
           "$codex" --version
           node --version
-          pnpm --version
+          # No pnpm check: a warm cache means the action never set it up, which
+          # is the point. What matters is that the CLI above runs.
           test -f "$RUNNER_TEMP/codex-home/config.toml"
           grep -q '^model_provider = "openai"' "$RUNNER_TEMP/codex-home/config.toml"
           test "$OUTCOME" = failure || { echo "expected the dummy key to fail the review, got $OUTCOME"; exit 1; }
           grep -qi "401\|unauthorized\|api key" "$RUNNER_TEMP/codex-review-events.jsonl"
+
+      # Fails the job when the action did not leave an entry under that key.
+      - name: The install is in the cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/codex-cli
+          key: ${{ steps.key.outputs.cache-key }}
+          lookup-only: true
+          fail-on-cache-miss: true
+
+      - name: Throw the install away
+        run: |
+          set -eu
+          rm -rf "$RUNNER_TEMP/codex-cli" "$RUNNER_TEMP/codex-home"
+          echo "SECOND_START=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Run the action again, restoring the install from the cache
+        id: cached
+        continue-on-error: true
+        uses: ./
+        with:
+          provider: openai
+          openai-api-key: not-a-real-key
+          base-ref: origin/main
+          pr-number: "0"
+          head-sha: ${{ github.sha }}
+          post-mode: none
+
+      - name: The restored install runs
+        env:
+          OUTCOME: ${{ steps.cached.outcome }}
+        run: |
+          set -eu
+          echo "second run: $(( $(date +%s) - SECOND_START ))s"
+          "$RUNNER_TEMP/codex-cli/node_modules/.bin/codex" --version
+          test "$OUTCOME" = failure || { echo "expected the dummy key to fail the review, got $OUTCOME"; exit 1; }

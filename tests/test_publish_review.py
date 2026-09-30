@@ -225,6 +225,49 @@ class SuggestionRenderTest(unittest.TestCase):
         self.assertIn("replaces `e2e/pricing.ts:14-16`", posted["comments"][0]["body"])
 
 
+class HidePreviousTest(unittest.TestCase):
+    """Earlier Codex comments are collapsed from ids read once for the whole run."""
+
+    def calls(self, comments=(), review_comments=()):
+        log = []
+
+        def api(method, path, token, payload=None, url=None):
+            log.append((method, path, payload))
+            if "page=2" in path:
+                return []
+            if "/issues/1/comments" in path:
+                return list(comments)
+            if "/pulls/1/comments" in path:
+                return list(review_comments)
+            return {}
+
+        return api, log
+
+    def test_prefetched_ids_need_no_listing(self):
+        api, log = self.calls()
+        with mock.patch.object(pr, "github", side_effect=api):
+            hidden = pr.hide_previous("o/r", "1", "t", "", [{"node_id": "IC_1", "id": 7},
+                                                            {"node_id": "RC_1", "id": 8}])
+        self.assertEqual(hidden, 2)
+        self.assertEqual([path for _, path, _ in log], ["", ""])  # two GraphQL mutations only
+
+    def test_the_progress_note_is_never_collapsed(self):
+        api, _ = self.calls()
+        with mock.patch.object(pr, "github", side_effect=api):
+            hidden = pr.hide_previous("o/r", "1", "t", "7", [{"node_id": "IC_1", "id": 7},
+                                                             {"node_id": "RC_1", "id": 8}])
+        self.assertEqual(hidden, 1)
+
+    def test_without_them_it_lists_both_kinds_of_comment(self):
+        api, log = self.calls(comments=[{"node_id": "IC_1", "id": 7, "body": pr.MARKER + "\nreview"},
+                                        {"node_id": "IC_2", "id": 9, "body": "someone else"}],
+                              review_comments=[{"node_id": "RC_1", "id": 8, "body": "x\n" + pr.MARKER}])
+        with mock.patch.object(pr, "github", side_effect=api):
+            hidden = pr.hide_previous("o/r", "1", "t")
+        self.assertEqual(hidden, 2)
+        self.assertEqual(len([p for _, p, _ in log if "/comments" in p]), 2)
+
+
 class PathFilterMainTest(unittest.TestCase):
     """include-paths and exclude-paths drop findings after parsing."""
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Run the action's steps locally against a real pull request, the same order
-# action.yml runs them: progress note, Codex config, `codex exec review`,
-# publish, then clear the note (or post a failure note).
+# action.yml runs them: previous review, skip-unchanged check, progress note,
+# Codex config, `codex exec review`, publish, then clear the note (or post a
+# failure note).
 #
 # Uses your local Codex ChatGPT login (~/.codex/auth.json), so no API key or
 # CI minutes are needed. Posts to the PR with GH_TOKEN.
@@ -11,8 +12,11 @@
 # Any environment variable the scripts read (MAX_PRIORITY, POST_MODE,
 # REVIEW_INSTRUCTIONS, FAIL_ON_PRIORITY, HIDE_PREVIOUS, SUGGESTIONS,
 # INCLUDE_PATHS, EXCLUDE_PATHS, MAX_CHANGED_LINES, LARGE_PR, ICONS,
-# ICON_BASE_URL, ...) can be set to override the defaults below. DRY_RUN=1 skips
-# everything that posts.
+# ICON_BASE_URL, SKIP_UNCHANGED, FORCE, ...) can be set to override the defaults
+# below. DRY_RUN=1 skips everything that posts.
+#
+# Re-running it straight away posts the "already reviewed" note and calls no
+# model, the way the action does; FORCE=1 reviews the same commit again.
 #
 # CHECK_RUN=1 also runs the check-run steps; a personal token cannot create
 # check runs, so that only exercises the 403 warning. SARIF is always written
@@ -68,6 +72,12 @@ export MAX_CHANGED_LINES="${MAX_CHANGED_LINES:-}" LARGE_PR="${LARGE_PR:-warn}"
 # ICONS=false renders text only; ICON_BASE_URL points the images somewhere the
 # icons already exist, such as a pushed branch on the public repository.
 export ICONS="${ICONS:-true}" ICON_BASE_URL="${ICON_BASE_URL:-}"
+# Part of the settings digest the state marker carries, so the same values have
+# to reach the skip-unchanged check and publish_review.py.
+export PROVIDER="${PROVIDER:-openai}" MAX_PRIORITY="${MAX_PRIORITY:-P3}"
+export REVIEW_INSTRUCTIONS="${REVIEW_INSTRUCTIONS:-}" REVIEW_INSTRUCTIONS_FILE="${REVIEW_INSTRUCTIONS_FILE:-}"
+export SKIP_UNCHANGED="${SKIP_UNCHANGED:-true}"
+case "${FORCE:-}" in 1|true|yes) export FORCE=true ;; *) export FORCE=false ;; esac
 : > "$GITHUB_OUTPUT"
 echo "run dir: $run"
 
@@ -84,6 +94,24 @@ if [ "$(sed -n 's/^skip=//p' "$GITHUB_OUTPUT" | tail -1)" = "true" ]; then
   exit 0
 fi
 
+# Previous review state, read before anything is posted: it decides the base ref
+# (incremental), what got fixed, and whether this commit needs a review at all.
+export STATE_FILE="$run/codex-review-state.json"
+export INCREMENTAL="${INCREMENTAL:-false}" RESOLVE_FIXED_THREADS="${RESOLVE_FIXED_THREADS:-true}"
+(cd "$checkout" && python3 "$root/scripts/history.py" plan)
+# BASE_REF stays the input the way action.yml passes it to the steps below; only
+# `codex exec review` uses the resolved one.
+review_base="$(output review-base)"
+export PREVIOUS_SHA="$(output previous-sha)"
+export INCREMENTAL_NOTE="$(sed -n 's/^note=//p' "$GITHUB_OUTPUT" | tail -1)"
+
+# Already reviewed at this commit with these settings? Then no model is called.
+post python3 "$root/scripts/rereview.py" check
+if [ "$(output skipped)" = "true" ]; then
+  echo "skipping the review: $(output skip-reason) ($(output review-url))"
+  exit 0
+fi
+
 post python3 "$root/scripts/status.py" start
 export STATUS_COMMENT_ID="$(output status-comment-id)"
 
@@ -91,14 +119,6 @@ if [ "${CHECK_RUN:-0}" = "1" ]; then
   post python3 "$root/scripts/checks.py" start
   export CHECK_RUN_ID="$(output check-run-id)"
 fi
-
-# Previous review state: sets the base ref (incremental) and what got fixed.
-export STATE_FILE="$run/codex-review-state.json"
-export INCREMENTAL="${INCREMENTAL:-false}" RESOLVE_FIXED_THREADS="${RESOLVE_FIXED_THREADS:-true}"
-(cd "$checkout" && python3 "$root/scripts/history.py" plan)
-export BASE_REF="$(sed -n 's/^review-base=//p' "$GITHUB_OUTPUT" | tail -1)"
-export PREVIOUS_SHA="$(sed -n 's/^previous-sha=//p' "$GITHUB_OUTPUT" | tail -1)"
-export INCREMENTAL_NOTE="$(sed -n 's/^note=//p' "$GITHUB_OUTPUT" | tail -1)"
 
 # Codex home with the local login; config comes from write_config.py. The
 # ChatGPT login picks its own model, so the model line is dropped.
@@ -110,7 +130,7 @@ sed -i.bak '/^model = /d' "$CODEX_HOME/config.toml" && rm -f "$CODEX_HOME/config
 
 status=0
 # Not --ephemeral, so the session rollout with the real token counts is kept.
-(cd "$checkout" && "$codex" exec review --base "$BASE_REF" --json \
+(cd "$checkout" && "$codex" exec review --base "$review_base" --json \
   -o "$run/codex-review.md" < /dev/null > "$run/codex-review-events.jsonl" 2> "$run/codex.stderr") || status=$?
 rm -f "$CODEX_HOME/auth.json"
 echo "codex exit: $status"

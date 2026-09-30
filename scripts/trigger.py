@@ -4,14 +4,14 @@
 Reads the triggering event and answers three questions: is this a review
 request, is it allowed, and what should be reviewed. Three events trigger:
 
-    issue_comment      "@gpt review [openai|bedrock] [low|medium|high|xhigh]"
+    issue_comment      "@gpt review [openai|bedrock] [low|medium|high|xhigh] [force]"
                        at the start of a comment on an open pull request
     pull_request       a configured label added to the pull request
     workflow_dispatch   a pull request number typed in the Actions tab
 
 The answer is written to GITHUB_OUTPUT as run, pr-number, head-sha, base-ref,
-provider, effort, comment-id and reason. A declined request is not an error:
-run=false with a reason, so a stray comment leaves the workflow green.
+provider, effort, force, comment-id and reason. A declined request is not an
+error: run=false with a reason, so a stray comment leaves the workflow green.
 
 Standard library only, so it runs on any runner without installing anything.
 """
@@ -31,6 +31,8 @@ from publish_review import github  # noqa: E402
 
 EFFORTS = ("low", "medium", "high", "xhigh")
 PROVIDERS = ("openai", "bedrock")
+# Asks for a review even when the commit already has one with these settings.
+FORCE_WORDS = ("force",)
 # getCollaboratorPermissionLevel reports maintain and triage as write and read.
 WRITE_PERMISSIONS = ("admin", "maintain", "write")
 
@@ -53,6 +55,7 @@ class Request(NamedTuple):
     effort: str
     comment_id: str = ""
     from_label: bool = False
+    force: bool = False
 
 
 class Settings:
@@ -70,14 +73,21 @@ class Settings:
         self.effort = (env.get("DEFAULT_EFFORT") or "medium").strip().lower()
         self.label = (env.get("LABEL") or "").strip()
         self.remove_label = (env.get("REMOVE_LABEL") or "true").strip().lower() == "true"
+        self.force = (env.get("FORCE") or "").strip().lower() == "true"
         self.dispatch_pr = (env.get("PR_NUMBER") or "").strip()
         self._base_branches = split_list(env.get("BASE_BRANCHES", ""))
 
-    def base_branches(self) -> list[str]:
-        """Allowed base branches; empty input means the repository default."""
+    def base_branches(self, pull_request: dict | None = None) -> list[str]:
+        """Allowed base branches; empty input means the repository default.
+
+        The pull request payload already names it, so the repository is only
+        fetched when it is not there.
+        """
         if not self._base_branches:
-            repo = github("GET", f"/repos/{self.repo}", self.token)
-            self._base_branches = [repo["default_branch"]]
+            default = (((pull_request or {}).get("base") or {}).get("repo") or {}).get("default_branch")
+            if not default:
+                default = (github("GET", f"/repos/{self.repo}", self.token) or {})["default_branch"]
+            self._base_branches = [default]
         return self._base_branches
 
 
@@ -105,9 +115,10 @@ def outputs(**values: object) -> None:
 # Parsing ---------------------------------------------------------------------
 
 
-def parse_options(first_line: str, settings: Settings) -> tuple[str, str]:
-    """Words after the command pick provider and effort: `@gpt review bedrock high`."""
-    provider, effort = settings.provider, settings.effort
+def parse_options(first_line: str, settings: Settings) -> tuple[str, str, bool]:
+    """Words after the command pick provider, effort and a forced re-review:
+    `@gpt review bedrock high force`."""
+    provider, effort, force = settings.provider, settings.effort, settings.force
     # Known providers are recognised even when they aren't allowed, so asking
     # for a forbidden one is refused rather than silently reviewed on the other.
     for word in first_line.strip()[len(settings.command):].lower().split():
@@ -115,13 +126,15 @@ def parse_options(first_line: str, settings: Settings) -> tuple[str, str]:
             provider = word
         elif word in EFFORTS:
             effort = word
+        elif word in FORCE_WORDS:
+            force = True
         else:
             print(f"::notice::Ignoring unknown option '{word}'.")
     if provider not in settings.providers:
         raise Skip("invalid-provider", f"Provider '{provider}' is not one of {', '.join(settings.providers)}.")
     if effort not in EFFORTS:
         raise Skip("invalid-effort", f"Invalid reasoning effort '{effort}'; use {', '.join(EFFORTS)}.")
-    return provider, effort
+    return provider, effort, force
 
 
 def build_request(settings: Settings, event: dict) -> Request:
@@ -134,8 +147,9 @@ def build_request(settings: Settings, event: dict) -> Request:
         body = comment.get("body") or ""
         if not body.lstrip().startswith(settings.command):
             raise Skip("no-command")
-        provider, effort = parse_options(body.lstrip().splitlines()[0], settings)
-        return Request(int(issue["number"]), settings.actor, provider, effort, str(comment.get("id") or ""))
+        provider, effort, force = parse_options(body.lstrip().splitlines()[0], settings)
+        return Request(int(issue["number"]), settings.actor, provider, effort,
+                       str(comment.get("id") or ""), force=force)
 
     if settings.event_name in ("pull_request", "pull_request_target"):
         if not settings.label:
@@ -145,14 +159,14 @@ def build_request(settings: Settings, event: dict) -> Request:
             raise Skip("label-mismatch")
         number = int((event.get("pull_request") or {}).get("number") or event.get("number") or 0)
         # A label carries no options, so only the defaults are checked.
-        provider, effort = parse_options(settings.command, settings)
-        return Request(number, settings.actor, provider, effort, from_label=True)
+        provider, effort, force = parse_options(settings.command, settings)
+        return Request(number, settings.actor, provider, effort, from_label=True, force=force)
 
     if settings.event_name == "workflow_dispatch":
         if not settings.dispatch_pr.isdigit():
             raise Skip("no-pr-number", "workflow_dispatch needs a pull request number in the pr-number input.")
-        provider, effort = parse_options(settings.command, settings)
-        return Request(int(settings.dispatch_pr), settings.actor, provider, effort)
+        provider, effort, force = parse_options(settings.command, settings)
+        return Request(int(settings.dispatch_pr), settings.actor, provider, effort, force=force)
 
     raise Skip("unsupported-event", f"Event '{settings.event_name}' does not trigger a review.")
 
@@ -179,7 +193,7 @@ def check_pull_request(settings: Settings, number: int) -> dict:
     head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
     if head_repo != settings.repo:
         raise Skip("fork", "Fork PRs are not reviewed: the review job holds model credentials.")
-    allowed = settings.base_branches()
+    allowed = settings.base_branches(pr)
     base = (pr.get("base") or {}).get("ref", "")
     if base not in allowed:
         reply(settings, number, f"Codex review only runs on PRs targeting {as_code(allowed)} (this PR targets `{base}`).")
@@ -233,7 +247,8 @@ def main() -> int:
         pr = check_pull_request(settings, request.pr_number)
         if request.comment_id:
             react_eyes(settings, request.comment_id)
-        print(f"Reviewing PR #{pr['number']} ({request.provider}, {request.effort} effort).")
+        forced = " forced" if request.force else ""
+        print(f"Reviewing PR #{pr['number']} ({request.provider}, {request.effort} effort{forced}).")
         outputs(
             run="true",
             pr_number=pr["number"],
@@ -241,6 +256,7 @@ def main() -> int:
             base_ref="origin/" + pr["base"]["ref"],
             provider=request.provider,
             effort=request.effort,
+            force="true" if request.force else "false",
             comment_id=request.comment_id,
             reason="",
         )
@@ -249,7 +265,7 @@ def main() -> int:
             print(f"::notice::{skip.message}")
         print(f"No review: {skip.reason}.")
         outputs(run="false", pr_number="", head_sha="", base_ref="", provider="", effort="",
-                comment_id="", reason=skip.reason)
+                force="false", comment_id="", reason=skip.reason)
     finally:
         if labelled:
             remove_label(settings, labelled)

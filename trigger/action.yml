@@ -7,7 +7,7 @@ author: Piyush Gambhir
 
 inputs:
   command:
-    description: "Comment prefix that requests a review. Options follow it on the first line, e.g. `@gpt review bedrock high`."
+    description: "Comment prefix that requests a review. Options follow it on the first line, e.g. `@gpt review bedrock high force`."
     default: "@gpt review"
   label:
     description: "Label that requests a review when added to a pull request. Empty turns label triggers off."
@@ -30,6 +30,9 @@ inputs:
   pr-number:
     description: "Pull request number, for `workflow_dispatch` runs. Ignored for comment and label triggers."
     default: ""
+  force:
+    description: "Treat every request as forced, so a commit that already has a review is reviewed again. A comment can ask for this with `force`."
+    default: "false"
   github-token:
     description: "Token used to read the PR and to react or reply (needs `pull-requests: write` and `issues: write`)."
     default: ${{ github.token }}
@@ -53,6 +56,9 @@ outputs:
   effort:
     description: "Reasoning effort the request asked for, or the default."
     value: ${{ steps.decide.outputs.effort }}
+  force:
+    description: "`true` when the request asked for a fresh review (`force`), so an already-reviewed commit is reviewed again."
+    value: ${{ steps.decide.outputs.force }}
   comment-id:
     description: "ID of the requesting comment, for reactions. Empty for label and manual triggers."
     value: ${{ steps.decide.outputs.comment-id }}
@@ -76,4 +82,5 @@ runs:
         DEFAULT_EFFORT: ${{ inputs.default-effort }}
         ALLOWED_PROVIDERS: ${{ inputs.allowed-providers }}
         PR_NUMBER: ${{ inputs.pr-number }}
+        FORCE: ${{ inputs.force }}
       run: python3 "$GITHUB_ACTION_PATH/../scripts/trigger.py"

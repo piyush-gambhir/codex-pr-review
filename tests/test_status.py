@@ -91,6 +91,15 @@ class StatusTest(unittest.TestCase):
         self.assertEqual(calls[0][:2], ("DELETE", "/repos/o/r/issues/comments/42"))
         self.assertEqual(calls[1][3], {"content": "rocket"})
 
+    def test_done_without_a_requesting_comment_only_removes_the_note(self):
+        """How a cancelled run clears up: the note goes, the request is not
+        answered, so it gets no reaction."""
+        calls = []
+        with mock.patch.dict(os.environ, {**ENV, "STATUS_COMMENT_ID": "42", "TRIGGER_COMMENT_ID": ""}, clear=True), \
+                mock.patch.object(status, "github", side_effect=lambda *a, **k: calls.append(a)):
+            status.main("done")
+        self.assertEqual([call[:2] for call in calls], [("DELETE", "/repos/o/r/issues/comments/42")])
+
 
 if __name__ == "__main__":
     unittest.main()

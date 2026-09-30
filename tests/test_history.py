@@ -103,6 +103,23 @@ class LatestStateTest(unittest.TestCase):
     def test_no_previous_state(self):
         self.assertEqual(history.latest_state("o/r", "1", "t", self.calls([{"created_at": "x", "body": "hi"}], [])), {})
 
+    def test_the_state_carries_a_link_to_where_it_was_found(self):
+        marker = history.state_marker(SHA, [finding("New finding")])
+        call = self.calls([{"created_at": "2026-01-01T00:00:00Z", "body": marker,
+                            "html_url": "https://github.com/o/r/pull/1#issuecomment-7"}], [])
+        self.assertEqual(history.latest_state("o/r", "1", "t", call)["url"],
+                         "https://github.com/o/r/pull/1#issuecomment-7")
+
+    def test_bodies_already_in_hand_are_not_listed_again(self):
+        def refuse(*args, **kwargs):
+            raise AssertionError("latest_state must not call the API when it is given the bodies")
+
+        items = [{"created_at": "2026-01-01T00:00:00Z", "body": history.state_marker(OLD_SHA, [])},
+                 {"submitted_at": "2026-01-02T00:00:00Z", "body": history.state_marker(SHA, [])}]
+        self.assertEqual(history.latest_state("o/r", "1", "t", refuse, items)["sha"], SHA)
+        # An empty conversation is an answer too, not a reason to go and look.
+        self.assertEqual(history.latest_state("o/r", "1", "t", refuse, []), {})
+
 
 class ClassifyTest(unittest.TestCase):
     def setUp(self):
@@ -230,6 +247,36 @@ class PlanTest(unittest.TestCase):
             self.assertEqual(history.load_plan(str(state_file))["previous"]["sha"], OLD_SHA)
         self.assertEqual(history.load_plan(""), {})
         self.assertEqual(history.load_plan("/nonexistent/plan.json"), {})
+
+    def test_the_plan_carries_what_publishing_needs(self):
+        """A shared read puts the comments to collapse and the threads to resolve
+        in the plan, so publish_review.py does not list the PR again."""
+        bundle = {"items": [{"created_at": "2026-01-01T00:00:00Z", "body": self.state}],
+                  "hide": [{"node_id": "IC_0", "id": 100}], "threads": [["PRRT_1", "abc123456789"]]}
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file, out = pathlib.Path(tmp, "state.json"), pathlib.Path(tmp, "out")
+            env = {**self.env, "STATE_FILE": str(state_file), "GITHUB_OUTPUT": str(out)}
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(pr, "github", self.call), \
+                    mock.patch("pr_state.fetch", return_value=bundle):
+                self.assertEqual(history.main("plan"), 0)
+            plan = history.load_plan(str(state_file))
+        self.assertEqual(plan["previous"]["sha"], OLD_SHA)
+        self.assertEqual(plan["hide"], bundle["hide"])
+        self.assertEqual(plan["threads"], bundle["threads"])
+
+    def test_without_a_shared_read_the_plan_asks_for_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file, out = pathlib.Path(tmp, "state.json"), pathlib.Path(tmp, "out")
+            env = {**self.env, "STATE_FILE": str(state_file), "GITHUB_OUTPUT": str(out)}
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(pr, "github", self.call), \
+                    mock.patch("pr_state.fetch", return_value=None):
+                self.assertEqual(history.main("plan"), 0)
+            plan = history.load_plan(str(state_file))
+        # None, not [], so every reader falls back to its own REST listing.
+        self.assertNotIn("hide", plan)
+        self.assertNotIn("threads", plan)
 
     def test_unknown_action(self):
         self.assertEqual(history.main("nope"), 1)

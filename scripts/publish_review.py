@@ -194,15 +194,20 @@ def commentable_lines(repo: str, pr: str, token: str) -> dict[str, set[int]]:
     return lines
 
 
-def hide_previous(repo: str, pr: str, token: str, keep_id: str = "") -> int:
-    """Collapse earlier Codex comments on the PR as outdated."""
-    node_ids = [
-        c["node_id"]
-        for c in paginate(f"/repos/{repo}/issues/{pr}/comments", token)
-        + paginate(f"/repos/{repo}/pulls/{pr}/comments", token)
-        if (c.get("body") or "").startswith(MARKER_PREFIX) or MARKER in (c.get("body") or "")
-        if str(c["id"]) != keep_id
-    ]
+def hide_previous(repo: str, pr: str, token: str, keep_id: str = "", known: list | None = None) -> int:
+    """Collapse earlier Codex comments on the PR as outdated.
+
+    `known` are the {node_id, id} pairs of this action's earlier comments, read
+    once for the whole run (see pr_state.py); without them they are listed here.
+    """
+    if known is None:
+        known = [
+            {"node_id": c["node_id"], "id": c["id"]}
+            for c in paginate(f"/repos/{repo}/issues/{pr}/comments", token)
+            + paginate(f"/repos/{repo}/pulls/{pr}/comments", token)
+            if (c.get("body") or "").startswith(MARKER_PREFIX) or MARKER in (c.get("body") or "")
+        ]
+    node_ids = [c["node_id"] for c in known if str(c.get("id") or "") != keep_id]
     hidden = 0
     for node_id in node_ids:
         query = "mutation($id: ID!) { minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) { clientMutationId } }"
@@ -489,7 +494,7 @@ def main() -> int:
     ctx.resolved, ctx.carried, ctx.still_open = history.classify(
         previous.get("findings") or [], findings, plan.get("changed-files")
     )
-    ctx.state = history.state_marker(ctx.head_sha, findings, ctx.carried)
+    ctx.state = history.state_marker(ctx.head_sha, findings, ctx.carried, history.settings_digest(dict(env)))
     if previous:
         print(f"Since {history.short(ctx.previous_sha)}: {len(ctx.resolved)} resolved, "
               f"{len(ctx.still_open)} still open, {len(ctx.carried)} not re-checked.")
@@ -500,7 +505,8 @@ def main() -> int:
 
     if mode != "none":
         if env.get("HIDE_PREVIOUS", "true").strip().lower() == "true":
-            print(f"Hid {hide_previous(repo, pr, token, env.get('STATUS_COMMENT_ID', ''))} earlier Codex comment(s).")
+            known = plan.get("hide")  # read with the state above, so not listed again
+            print(f"Hid {hide_previous(repo, pr, token, env.get('STATUS_COMMENT_ID', ''), known)} earlier Codex comment(s).")
         if mode == "comment" or not findings:
             github("POST", f"/repos/{repo}/issues/{pr}/comments", token, {"body": body_markdown(summary, findings, ctx)})
             print(f"Posted comment with {plural(len(findings), 'finding')}.")
@@ -509,7 +515,8 @@ def main() -> int:
         set_output("posted", "true")
         if ctx.resolved and env.get("RESOLVE_FIXED_THREADS", "true").strip().lower() == "true":
             fixed = {item["fp"] for item in ctx.resolved}
-            print(f"Resolved {history.resolve_threads(repo, pr, token, fixed, github, GRAPHQL)} fixed thread(s).")
+            threads = plan.get("threads")  # read with the state above, so not listed again
+            print(f"Resolved {history.resolve_threads(repo, pr, token, fixed, github, GRAPHQL, threads)} fixed thread(s).")
 
     if fail_on is not None and findings and min(f["priority"] for f in findings) <= fail_on:
         print(f"::error::Codex found P{min(f['priority'] for f in findings)} issues (fail-on-priority is P{fail_on}).")
