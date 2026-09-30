@@ -210,7 +210,7 @@ The score is stored in the review's state marker, so the next review shows the t
 
 | | When |
 |---|---|
-| `high` | a coverage report says every changed file was inspected; or, with no report, one pass over a diff inside `max-changed-lines` (or under 2000 changed lines when no limit is set) |
+| `high` | a coverage report says every changed file was inspected; or, with no report, one pass over a diff inside `max-changed-lines` (or 2000 changed lines or fewer when no limit is set) |
 | `medium` | a coverage report with files left out but at least 80% inspected; an `incremental` pass, which only read the new commits; or a diff at 75% of `max-changed-lines` or more |
 | `low` | a coverage report with less than 80% of the files inspected; or a diff over `max-changed-lines` reviewed anyway with `large-pr: warn` |
 
@@ -475,6 +475,7 @@ The workflow mints an app token with `actions/create-github-app-token` and passe
 | `health-score` | 0 to 100, from the open findings and the PR's own signals |
 | `confidence` | How much of the PR the review covered: `high`, `medium` or `low` |
 | `health-trend` | Change in the score since the last review, e.g. `+25`; empty with nothing to compare with |
+| `label` | The verdict label put on the PR; empty when `labels` is off, nothing was posted, or GitHub refused |
 | `findings-count` | Findings reported (after `max-priority`) |
 | `highest-priority` | e.g. `P1`; empty when clean |
 | `filtered-count` | Findings hidden by `max-priority` |

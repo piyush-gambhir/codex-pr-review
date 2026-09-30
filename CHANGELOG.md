@@ -14,7 +14,7 @@ This project follows [semantic versioning](https://semver.org). The `v1` tag alw
 - **The pull request is labelled with the verdict**: `codex: ready`, `codex: nits`, `codex: changes-requested` or `codex: blocked`, created with sensible colours when the repository has none, with the other three removed. New input `labels` (default `true`). It needs `issues: write`; without it the action warns once and posts the review as usual.
 - New input `fail-on-verdict` (`ready`, `nits`, `changes-requested`, `blocked`), which fails the step and the check run on that verdict or worse. It works alongside `fail-on-priority`, and both still leave the review posted.
 - New input `review-event`: `COMMENT` (the default, unchanged), `REQUEST_CHANGES`, or `auto`, which requests changes on a `changes-requested` or `blocked` verdict. GitHub may refuse to let the posting identity request changes; the action then posts the same review as a comment and warns, and gives up the inline anchors only if that is refused too. `auto` never requests changes over a **Needs a full review** verdict, since nothing was actually found.
-- New outputs `verdict`, `health-score`, `confidence` and `health-trend`. The reusable workflow passes `fail-on-verdict`, `labels` and `review-event` through and logs the verdict.
+- New outputs `verdict`, `health-score`, `confidence`, `health-trend` and `label`. The reusable workflow passes `fail-on-verdict`, `labels` and `review-event` through and logs the verdict.
 
 ### Changed
 

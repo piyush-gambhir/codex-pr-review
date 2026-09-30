@@ -164,6 +164,9 @@ outputs:
   health-trend:
     description: "Change in the health score since the last Codex review, e.g. `+25`; empty when there is none to compare with."
     value: ${{ steps.publish.outputs.health-trend }}
+  label:
+    description: "The verdict label put on the pull request; empty when `labels` is off, nothing was posted, or GitHub refused."
+    value: ${{ steps.publish.outputs.label }}
   findings-count:
     description: "Number of findings reported (after max-priority filtering)."
     value: ${{ steps.publish.outputs.findings-count }}
