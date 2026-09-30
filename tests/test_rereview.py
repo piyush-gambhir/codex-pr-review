@@ -185,6 +185,19 @@ class MainTest(unittest.TestCase):
         _, outputs, calls = run_check(state(POST_MODE="none"), POST_MODE="none")
         self.assertEqual((outputs["skipped"], calls), ("true", []))
 
+    def test_the_note_repeats_the_verdict_the_existing_review_reached(self):
+        _, _, calls = run_check(dict(state(), vd="changes-requested", hs=55))
+        body = calls[0][3]["body"]
+        self.assertIn("It said: **Changes requested** · Health 55/100.", body)
+
+    def test_a_marker_without_a_verdict_says_nothing_extra(self):
+        _, _, calls = run_check(state())
+        self.assertNotIn("It said", calls[0][3]["body"])
+        # A score on its own, or a verdict this version does not know, is ignored.
+        self.assertEqual(rereview.verdict_line({"hs": 80}), "")
+        self.assertEqual(rereview.verdict_line({"vd": "nonsense", "hs": 80}), "")
+        self.assertEqual(rereview.verdict_line({"vd": "ready"}), "It said: **Ready to merge**.")
+
     def test_unknown_action(self):
         self.assertEqual(rereview.main("nope"), 1)
 

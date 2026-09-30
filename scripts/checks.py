@@ -3,9 +3,10 @@
 
     checks.py start   creates an in-progress check run on the reviewed commit
                       (its id is written to GITHUB_OUTPUT as check-run-id)
-    checks.py finish  completes it: conclusion from the findings and
-                      fail-on-priority, the issues table as the summary, and
-                      one annotation per finding
+    checks.py finish  completes it: conclusion from the merge verdict, the
+                      findings and the two gates (fail-on-priority and
+                      fail-on-verdict), the verdict and issues table as the
+                      summary, and one annotation per finding
     checks.py cancel  completes it as cancelled
 
 Like status.py every call is best effort: a missing `checks: write` permission
@@ -27,6 +28,7 @@ import urllib.error
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import status  # noqa: E402
+import verdict as verdicts  # noqa: E402
 from publish_review import (  # noqa: E402
     Context,
     alert,
@@ -56,13 +58,22 @@ def annotation_level(priority: int) -> str:
     return ANNOTATION_LEVEL.get(priority, "notice")
 
 
-def conclusion(findings: list[dict], fail_on: int | None) -> str:
-    """success with no findings, failure when gating trips, neutral otherwise."""
-    if not findings:
-        return "success"
-    if fail_on is not None and min(f["priority"] for f in findings) <= fail_on:
+def conclusion(findings: list[dict], fail_on: int | None, health=None,
+               fail_on_verdict: str | None = None) -> str:
+    """The conclusion for this review.
+
+    With a merge verdict in hand: `failure` for `blocked` or a tripped gate,
+    `success` only for a ready or nits verdict the run is confident in, and
+    `neutral` for everything else, so a partial review never turns a required
+    check green. Without one (an older run, or a review that never published a
+    verdict) it is the earlier rule: clean is a pass, gating fails, else neutral.
+    """
+    gated = findings and fail_on is not None and min(f["priority"] for f in findings) <= fail_on
+    if health is None:
+        return "failure" if gated else ("success" if not findings else "neutral")
+    if gated:
         return "failure"
-    return "neutral"
+    return verdicts.check_conclusion(health, fail_on_verdict)
 
 
 def clamp(text: str, limit: int, note: str = "") -> str:
@@ -96,16 +107,20 @@ def batches(items: list[dict], size: int = ANNOTATION_BATCH) -> list[list[dict]]
 # Rendering ------------------------------------------------------------------
 
 
-def headline(findings: list[dict]) -> str:
+def headline(findings: list[dict], health=None) -> str:
     """Plain-text verdict for the check run's output title."""
-    if not findings:
-        return "No issues found"
-    return f"{plural(len(findings), 'issue')} ({priority_counts(findings)})"
+    found = "No issues found" if not findings else f"{plural(len(findings), 'issue')} ({priority_counts(findings)})"
+    if health is None:
+        return found
+    return f"{health.headline} \u00b7 Health {health.score}/100 \u00b7 {found}"
 
 
-def summary_markdown(prose: str, findings: list[dict], ctx: Context) -> str:
+def summary_markdown(prose: str, findings: list[dict], ctx: Context, health=None) -> str:
     """The same verdict and issues table as the posted review, for the check output."""
-    parts = [verdict(findings), prose.strip()]
+    parts = [verdict(findings, 0, health)]
+    if health is not None:
+        parts.append(verdicts.breakdown(health))
+    parts.append(prose.strip())
     if findings:
         parts.append(issues_table(findings, ctx))
     parts.append(f"<sub>{ctx.meta()}</sub>")
@@ -198,6 +213,16 @@ def read_text(path: str) -> str:
     return file.read_text(encoding="utf-8") if file and file.is_file() else ""
 
 
+def load_health(path: str):
+    """The verdict publish_review.py reached, or None when it never got there."""
+    if not path or not pathlib.Path(path).is_file():
+        return None
+    try:
+        return verdicts.Health.from_dict(json.loads(pathlib.Path(path).read_text(encoding="utf-8")))
+    except (ValueError, TypeError, KeyError):
+        return None
+
+
 def main(action: str) -> int:
     env = os.environ
     repo, token = env["GITHUB_REPOSITORY"], env.get("GH_TOKEN", "")
@@ -231,8 +256,11 @@ def main(action: str) -> int:
         return 0
 
     fail_on = parse_priority(env.get("FAIL_ON_PRIORITY", ""), None)
-    summary = summary_markdown(read_text(env.get("SUMMARY_FILE", "")), findings, ctx)
-    complete(repo, token, check_id, conclusion(findings, fail_on), headline(findings), summary, annotations(findings))
+    fail_on_verdict = verdicts.parse_threshold(env.get("FAIL_ON_VERDICT", ""))
+    health = load_health(env.get("HEALTH_FILE", ""))
+    summary = summary_markdown(read_text(env.get("SUMMARY_FILE", "")), findings, ctx, health)
+    complete(repo, token, check_id, conclusion(findings, fail_on, health, fail_on_verdict),
+             headline(findings, health), summary, annotations(findings))
     return 0
 
 

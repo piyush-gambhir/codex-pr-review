@@ -26,6 +26,7 @@ import urllib.error
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import history  # noqa: E402
 import status  # noqa: E402
+import verdict as verdicts  # noqa: E402
 from publish_review import Context, alert, github, set_output  # noqa: E402
 
 # Why the review ran after all. Only "already-reviewed" skips.
@@ -63,15 +64,29 @@ def decision(previous: dict, head_sha: str, digest: str, enabled: bool = True,
     return True, "already-reviewed"
 
 
-def note(ctx: Context, url: str) -> str:
+def verdict_line(previous: dict) -> str:
+    """What the review being pointed at concluded, when its marker says."""
+    name = (previous or {}).get("vd") or ""
+    if name not in verdicts.ORDER:
+        return ""
+    score = (previous or {}).get("hs")
+    said = f"It said: **{verdicts.HEADLINE[name]}**"
+    return said + (f" \u00b7 Health {int(score)}/100." if isinstance(score, (int, float)) else ".")
+
+
+def note(ctx: Context, url: str, previous: dict | None = None) -> str:
     """The note that goes up instead of a review."""
     commit = ctx.commit_link() or "this commit"
     already = f"[a Codex review]({url})" if url else "a Codex review"
     # Informational, not a warning: nothing is wrong, the answer already exists.
     headline = ctx.icons.tagged("skipped", f"**{ctx.title} skipped**")
+    body = f"{headline}\n\n{commit} already has {already} with these settings, so it was not reviewed again."
+    said = verdict_line(previous or {})
+    if said:
+        body += f"\n\n{said}"
     lines = [
         f"{status.STATUS_MARKER}",
-        alert("NOTE", f"{headline}\n\n{commit} already has {already} with these settings, so it was not reviewed again."),
+        alert("NOTE", body),
         "",
         f"<sub>{ctx.meta('Skipped')}</sub>",
         "<sub>Add `force` to the request to review it again.</sub>",
@@ -109,7 +124,7 @@ def main(action: str) -> int:
     if (env.get("POST_MODE") or "review").strip().lower() == "none":
         return 0  # nothing is posted in this mode, so there is no note either
     ctx = Context(dict(env))
-    github("POST", f"/repos/{repo}/issues/{pr}/comments", token, {"body": note(ctx, url)})
+    github("POST", f"/repos/{repo}/issues/{pr}/comments", token, {"body": note(ctx, url, previous)})
     # The request was answered, so it gets the same reaction a posted review gets.
     status.react(repo, token, env.get("TRIGGER_COMMENT_ID", ""), "rocket")
     return 0

@@ -13,7 +13,8 @@ steps through the plan file, so nothing is fetched twice:
 
     {"items": [...],      comment and review bodies, for the state marker
      "hide": [...],       ids of earlier Codex comments, for hide-previous
-     "threads": [...]}    unresolved (thread id, fingerprint) pairs
+     "threads": [...],    unresolved (thread id, fingerprint) pairs
+     "signals": {...}}    draft, mergeable and the check rollup, for the health score
 
 REST stays the fallback: when the query fails or cannot cover the whole
 conversation (an old GitHub Enterprise Server, a token GraphQL refuses, more
@@ -40,6 +41,9 @@ PR_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
+      isDraft
+      mergeable
+      commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       comments(last: %(page)d) {
         totalCount
         nodes { id databaseId body createdAt url }
@@ -128,6 +132,22 @@ def threads(pull: dict) -> list:
     return found
 
 
+def signals(pull: dict) -> dict:
+    """What the pull request itself says about merging it, for the health score.
+
+    `mergeable` is computed lazily by GitHub, so it is often `UNKNOWN` on a
+    fresh query, and the rollup covers the head commit's checks - this workflow
+    included, which is why only a rollup that actually failed ever counts.
+    """
+    commits = _nodes(pull.get("commits"))
+    rollup = ((commits[0].get("commit") if commits else None) or {}).get("statusCheckRollup") or {}
+    return {
+        "draft": bool(pull.get("isDraft")),
+        "mergeable": pull.get("mergeable") or "",
+        "checks": rollup.get("state") or "",
+    }
+
+
 def fetch(repo: str, pr: str, token: str, call, graphql: str) -> dict:
     """The whole bundle in one GraphQL call, or None when it cannot be had."""
     owner, _, name = (repo or "").partition("/")
@@ -144,4 +164,5 @@ def fetch(repo: str, pr: str, token: str, call, graphql: str) -> dict:
     if not pull:
         print("::warning::The pull request query returned nothing; using REST.")
         return None
-    return {"items": items(pull), "hide": hideable(pull), "threads": threads(pull)}
+    return {"items": items(pull), "hide": hideable(pull), "threads": threads(pull),
+            "signals": signals(pull)}

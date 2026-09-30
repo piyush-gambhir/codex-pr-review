@@ -2,6 +2,26 @@
 
 This project follows [semantic versioning](https://semver.org). The `v1` tag always points to the latest 1.x release; breaking input or output changes get a new major version.
 
+## Unreleased
+
+### Added
+
+- **Every review says whether the pull request should be merged.** The headline is now a merge verdict with a health score and a confidence level: `Changes requested · Health 55/100 · Confidence: low (partial review, 38/224 files inspected)`. All three are computed in the action ([`scripts/verdict.py`](scripts/verdict.py)), not asked of the model: Codex's own `overall_correctness` and `overall_confidence_score` fields come back empty and `0.0` on the pinned versions, and a rule you can read beats a number you cannot check. The verdict is advisory and the README says so: it belongs alongside CI and a human approval, not instead of them.
+  - **Verdict** from the worst finding still open: `ready` (**Ready to merge**, `TIP`), `nits` (**Mergeable, with nits**, `NOTE`), `changes-requested` (**Changes requested**, `WARNING`), `blocked` (**Do not merge**, `CAUTION`). Findings the last review reported and this pass did not re-check count as open, so an incremental re-review of one file can no longer say "ready to merge" over an untouched P0 somewhere else.
+  - **Health score** out of 100: -40 per P0, -20 per P1, -5 per P2, -1 per P3, capped at -80, -60, -15 and -5 in total, so every nit in the world costs at most 20, which is exactly one P1. Failing checks -10, merge conflicts -10 and a draft pull request -5 come off as well, read from the run's existing single GraphQL call ([`scripts/pr_state.py`](scripts/pr_state.py)) rather than any new request; only a rollup that actually failed counts, because at that point the review's own workflow is still pending. A collapsed **Why this score** block lists every row.
+  - **Trend**: the score and verdict travel in the review's state marker, so the next review says `Health 45 -> 70 (+25 since last review)`.
+  - **Confidence** `high`, `medium` or `low`, from the coverage report a full-coverage pass writes (`COVERAGE_FILE`) or, without one, from the size guard and whether the pass was incremental. Low confidence caps the verdict: a clean or nits-only result the run cannot stand behind is reported as **Needs a full review** with a sentence saying why, rather than as ready or mergeable. The score is not capped, because it grades the code that was read while the confidence grades the reading.
+- **The pull request is labelled with the verdict**: `codex: ready`, `codex: nits`, `codex: changes-requested` or `codex: blocked`, created with sensible colours when the repository has none, with the other three removed. New input `labels` (default `true`). It needs `issues: write`; without it the action warns once and posts the review as usual.
+- New input `fail-on-verdict` (`ready`, `nits`, `changes-requested`, `blocked`), which fails the step and the check run on that verdict or worse. It works alongside `fail-on-priority`, and both still leave the review posted.
+- New input `review-event`: `COMMENT` (the default, unchanged), `REQUEST_CHANGES`, or `auto`, which requests changes on a `changes-requested` or `blocked` verdict. GitHub may refuse to let the posting identity request changes; the action then posts the same review as a comment and warns, and gives up the inline anchors only if that is refused too. `auto` never requests changes over a **Needs a full review** verdict, since nothing was actually found.
+- New outputs `verdict`, `health-score`, `confidence`, `health-trend` and `label`. The reusable workflow passes `fail-on-verdict`, `labels` and `review-event` through and logs the verdict.
+
+### Changed
+
+- The check run's conclusion follows the verdict: `success` only for a `ready` or `nits` verdict at `high` confidence, `failure` for `blocked` or either gate, `neutral` otherwise. A partial review can no longer turn a required check green, which the old "no findings is a pass" rule allowed.
+- The "already reviewed" note repeats the verdict the review it points at reached.
+- The review job in the reusable workflow and both examples now ask for `issues: write`, for the label.
+
 ## v1.3.0 (2026-09-30)
 
 Faster and cheaper reviews, and a GitHub-native look with no emoji.

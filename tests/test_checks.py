@@ -11,6 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 import checks  # noqa: E402
 import publish_review as pr  # noqa: E402
+import verdict as verdicts  # noqa: E402
 
 SHA = "0123456789abcdef0123456789abcdef01234567"
 ENV = {"GITHUB_REPOSITORY": "o/r", "PR_NUMBER": "1", "GH_TOKEN": "t", "HEAD_SHA": SHA,
@@ -62,7 +63,62 @@ class MappingTest(unittest.TestCase):
         self.assertEqual(len(items[0]["message"]), checks.MESSAGE_LIMIT)
 
 
+class VerdictConclusionTest(unittest.TestCase):
+    """With a merge verdict in hand the conclusion follows it, not the count."""
+
+    def health(self, key, level="high", score=50):
+        return verdicts.Health(key, score, level)
+
+    def test_only_a_confident_pass_is_green(self):
+        cases = [
+            (verdicts.READY, "high", [], "success"),
+            (verdicts.NITS, "high", [finding(3)], "success"),
+            (verdicts.READY, "medium", [], "neutral"),
+            (verdicts.NITS, "low", [finding(2)], "neutral"),
+            (verdicts.CHANGES, "high", [finding(1)], "neutral"),
+            (verdicts.BLOCKED, "high", [finding(0)], "failure"),
+        ]
+        for key, level, findings, expected in cases:
+            self.assertEqual(checks.conclusion(findings, None, self.health(key, level)), expected,
+                             f"{key}/{level}")
+
+    def test_a_partial_review_of_a_clean_diff_is_not_a_pass(self):
+        # The old rule made "no findings" a success whatever the run covered.
+        self.assertEqual(checks.conclusion([], None), "success")
+        self.assertEqual(checks.conclusion([], None, self.health(verdicts.CHANGES, "low")), "neutral")
+
+    def test_both_gates_turn_it_red(self):
+        health = self.health(verdicts.NITS)
+        self.assertEqual(checks.conclusion([finding(2)], 2, health), "failure")
+        self.assertEqual(checks.conclusion([finding(2)], None, health, verdicts.NITS), "failure")
+        self.assertEqual(checks.conclusion([finding(2)], None, health, verdicts.CHANGES), "success")
+
+    def test_without_a_verdict_the_earlier_rule_applies(self):
+        self.assertEqual(checks.conclusion([], 1), "success")
+        self.assertEqual(checks.conclusion([finding(2)], None), "neutral")
+        self.assertEqual(checks.conclusion([finding(1)], 1), "failure")
+
+    def test_the_health_file_is_read_back_or_survived_without(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp, "health.json")
+            self.assertIsNone(checks.load_health(""))
+            self.assertIsNone(checks.load_health(str(path)))
+            path.write_text("not json")
+            self.assertIsNone(checks.load_health(str(path)))
+            path.write_text(json.dumps(verdicts.Health(verdicts.BLOCKED, 20, "medium").as_dict()))
+            self.assertEqual(checks.load_health(str(path)).verdict, verdicts.BLOCKED)
+
+
 class RenderTest(unittest.TestCase):
+    def test_headline_and_summary_carry_the_verdict(self):
+        health = verdicts.Health(verdicts.CHANGES, 75, "low", "partial review, 38/224 files inspected")
+        self.assertEqual(checks.headline([finding(1)], health),
+                         "Changes requested · Health 75/100 · 1 issue (1 P1)")
+        summary = checks.summary_markdown("Codex prose.", [finding(1)], ctx(), health)
+        self.assertIn("**Changes requested** · Health 75/100 · Confidence: low "
+                      "(partial review, 38/224 files inspected)", summary)
+        self.assertIn("<summary><b>Why this score</b></summary>", summary)
+
     def test_headline_counts_priorities(self):
         self.assertEqual(checks.headline([]), "No issues found")
         self.assertEqual(checks.headline([finding(1), finding(1), finding(2)]), "3 issues (2 P1, 1 P2)")

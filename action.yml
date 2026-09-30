@@ -71,6 +71,9 @@ inputs:
   fail-on-priority:
     description: "Fail the step when a reported finding is at this priority or higher, e.g. `P1`. Empty never fails on findings."
     default: ""
+  fail-on-verdict:
+    description: "Fail the step when the merge verdict is this or worse: `ready`, `nits`, `changes-requested` or `blocked`. Empty never fails on the verdict."
+    default: ""
   resolve-fixed-threads:
     description: "Resolve the inline threads of findings the new review no longer reports. Best effort; never fails the review."
     default: "true"
@@ -91,6 +94,12 @@ inputs:
   hide-previous:
     description: "Collapse earlier Codex comments on the PR as outdated before posting."
     default: "true"
+  labels:
+    description: "Label the pull request with the merge verdict (`codex: ready`, `codex: nits`, `codex: changes-requested` or `codex: blocked`), removing the other three. Needs `issues: write` or `pull-requests: write`; without it the action warns and posts the review as usual."
+    default: "true"
+  review-event:
+    description: "How the review is submitted: `COMMENT`, `REQUEST_CHANGES`, or `auto` (request changes on a `changes-requested` or `blocked` verdict). GitHub may refuse to let the posting identity request changes; the review is then posted as a comment instead."
+    default: COMMENT
   title:
     description: "Heading for the posted review."
     default: Codex review
@@ -143,6 +152,21 @@ inputs:
     default: "true"
 
 outputs:
+  verdict:
+    description: "Should this be merged: `ready`, `nits`, `changes-requested` or `blocked`."
+    value: ${{ steps.publish.outputs.verdict }}
+  health-score:
+    description: "Health score from 0 to 100: 100 less a weight per open finding and the pull request's own signals."
+    value: ${{ steps.publish.outputs.health-score }}
+  confidence:
+    description: "How much of the pull request the review covered: `high`, `medium` or `low`."
+    value: ${{ steps.publish.outputs.confidence }}
+  health-trend:
+    description: "Change in the health score since the last Codex review, e.g. `+25`; empty when there is none to compare with."
+    value: ${{ steps.publish.outputs.health-trend }}
+  label:
+    description: "The verdict label put on the pull request; empty when `labels` is off, nothing was posted, or GitHub refused."
+    value: ${{ steps.publish.outputs.label }}
   findings-count:
     description: "Number of findings reported (after max-priority filtering)."
     value: ${{ steps.publish.outputs.findings-count }}
@@ -611,7 +635,17 @@ runs:
         HIDE_PREVIOUS: ${{ inputs.hide-previous }}
         MAX_PRIORITY: ${{ inputs.max-priority }}
         FAIL_ON_PRIORITY: ${{ inputs.fail-on-priority }}
+        FAIL_ON_VERDICT: ${{ inputs.fail-on-verdict }}
+        LABELS: ${{ inputs.labels }}
+        REVIEW_EVENT: ${{ inputs.review-event }}
         SUMMARY_FILE: ${{ runner.temp }}/codex-review-summary.md
+        # The merge verdict, health score and confidence, for the check run below.
+        HEALTH_FILE: ${{ runner.temp }}/codex-review-health.json
+        # How much of the pull request was actually reviewed, when a pass wrote
+        # a coverage report; without one the size guard below decides.
+        COVERAGE_FILE: ${{ runner.temp }}/codex-review-coverage.json
+        CHANGED_LINES: ${{ steps.guard.outputs.changed-lines }}
+        MAX_CHANGED_LINES: ${{ inputs.max-changed-lines }}
         RESOLVE_FIXED_THREADS: ${{ inputs.resolve-fixed-threads }}
         STATE_FILE: ${{ runner.temp }}/codex-review-state.json
         PREVIOUS_SHA: ${{ steps.history.outputs.previous-sha }}
@@ -681,7 +715,9 @@ runs:
         CHECK_RUN_ID: ${{ steps.check.outputs.check-run-id }}
         FINDINGS_FILE: ${{ steps.publish.outputs.findings-file }}
         SUMMARY_FILE: ${{ runner.temp }}/codex-review-summary.md
+        HEALTH_FILE: ${{ runner.temp }}/codex-review-health.json
         FAIL_ON_PRIORITY: ${{ inputs.fail-on-priority }}
+        FAIL_ON_VERDICT: ${{ inputs.fail-on-verdict }}
         EVENTS_FILE: ${{ runner.temp }}/codex-review-events.jsonl
         ICONS: ${{ inputs.icons }}
         ICON_BASE_URL: ${{ inputs.icon-base-url }}

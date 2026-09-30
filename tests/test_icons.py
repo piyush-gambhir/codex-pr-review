@@ -11,6 +11,7 @@ import checks  # noqa: E402
 import history  # noqa: E402
 import icons  # noqa: E402
 import publish_review as pr  # noqa: E402
+import verdict as verdicts  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ICON_DIR = ROOT / "icons"
@@ -122,9 +123,13 @@ def everything_posted(**env):
     ctx.resolved = [history.entry(finding(1, "Round to integer cents", start=40))]
     ctx.carried = [history.entry(finding(2, "Validate the coupon code", path="src/coupons.ts", start=8))]
     ctx.still_open = {findings[0]["fingerprint"]}
-    ctx.state = history.state_marker(SHA, findings, ctx.carried)
+    ctx.health = verdicts.assess(findings, ctx.carried,
+                                 {"draft": True, "mergeable": "CONFLICTING", "checks": "FAILURE"},
+                                 previous={"hs": 30, "vd": "blocked"})
+    ctx.state = history.state_marker(SHA, findings, ctx.carried, "digest", ctx.health)
     ctx.note = "1 finding outside the reviewed paths not shown."
     inline = {id(findings[0]), id(findings[1])}
+    thin = verdicts.assess([], coverage={"complete": False, "files_total": 224, "files_inspected": 38})
     parts = [
         pr.body_markdown("The patch introduces four correctness issues.", findings, ctx, inline),
         pr.body_markdown("The patch introduces four correctness issues.", findings, ctx),
@@ -134,8 +139,11 @@ def everything_posted(**env):
         pr.details(findings[3], ctx),
         pr.verdict(findings, 1),
         pr.verdict([], 2),
-        checks.summary_markdown("The patch introduces four correctness issues.", findings, ctx),
+        pr.verdict([], 0, thin),
+        verdicts.breakdown(thin),
+        checks.summary_markdown("The patch introduces four correctness issues.", findings, ctx, ctx.health),
         checks.headline(findings),
+        checks.headline(findings, ctx.health),
     ]
     return "\n\n".join(parts)
 

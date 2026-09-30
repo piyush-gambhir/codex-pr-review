@@ -3,7 +3,8 @@
 
 Every review this action posts carries a hidden state marker
 
-    <!-- codex-pr-review-state {"v":1,"sha":"<head sha>","findings":[...]} -->
+    <!-- codex-pr-review-state {"v":1,"sha":"<head sha>","findings":[...],
+                                "vd":"<verdict>","hs":<health score>} -->
 
 with the reviewed commit and one fingerprint per finding, and every inline
 comment carries its finding's fingerprint. On the next run the most recent
@@ -89,7 +90,8 @@ def entry(finding: dict) -> dict:
     }
 
 
-def state_marker(head_sha: str, findings: list, carried: list | None = None, config: str = "") -> str:
+def state_marker(head_sha: str, findings: list, carried: list | None = None, config: str = "",
+                 health=None) -> str:
     """The hidden state to append to a posted body."""
     entries = [entry(f) for f in findings] + list(carried or [])
     payload = {"v": 1, "sha": head_sha, "findings": entries}
@@ -97,6 +99,11 @@ def state_marker(head_sha: str, findings: list, carried: list | None = None, con
         # What the review was produced with, so the next run can tell whether
         # asking again could say anything new (see rereview.py).
         payload["cfg"] = config
+    if health is not None:
+        # The verdict and health score this review reached, so the next one can
+        # show the trend and a skipped re-review can repeat the answer.
+        payload["vd"] = health.verdict
+        payload["hs"] = health.score
     return STATE_PREFIX + json.dumps(payload, separators=(",", ":")) + " -->"
 
 
@@ -454,6 +461,7 @@ def main(action: str) -> int:
     if bundle:
         result["hide"] = bundle["hide"]
         result["threads"] = bundle["threads"]
+        result["signals"] = bundle.get("signals")
     state_file = env.get("STATE_FILE", "")
     if state_file:
         pathlib.Path(state_file).write_text(json.dumps(result), encoding="utf-8")
