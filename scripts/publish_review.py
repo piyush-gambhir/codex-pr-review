@@ -40,17 +40,9 @@ import verdict as verdicts  # noqa: E402
 API = os.environ.get("GITHUB_API_URL", "https://api.github.com")
 GRAPHQL = os.environ.get("GITHUB_GRAPHQL_URL", "https://api.github.com/graphql")
 MARKER = "<!-- codex-pr-review -->"
-# Every comment this action writes (reviews and status notes) starts with this.
 MARKER_PREFIX = "<!-- codex-pr-review"
-# GitHub's own alert blocks carry the verdict: it draws the octicon, the colour
-# and the border, so the headline looks like the rest of the pull request page.
-# With a merge verdict the type comes from that (see scripts/verdict.py); the
-# fallback below, the worst priority reported, is what a caller with no verdict
-# in hand gets (TIP when there is nothing to report).
 VERDICT_ALERT = {0: "CAUTION", 1: "CAUTION", 2: "WARNING", 3: "NOTE"}
 CLEAN_ALERT = "TIP"
-# Tolerates text before the tag ("- Security [P1] ...") and a relative or
-# absolute path, since custom instructions can nudge Codex's layout.
 FINDING_RE = re.compile(
     r"^-\s+(?P<pre>.*?)\[P(?P<priority>\d)\]\s+(?P<title>.+?)\s+\u2014\s+"
     r"(?P<path>\S+?):(?P<start>\d+)(?:-(?P<end>\d+))?\s*$"
@@ -59,7 +51,6 @@ FINDINGS_HEADING_RE = re.compile(r"^(?:Full )?review comments?:[ \t]*$", re.IGNO
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
 
 
-# Parsing ---------------------------------------------------------------------
 
 
 def dedent_body(lines: list[str]) -> str:
@@ -77,7 +68,6 @@ def dedent_body(lines: list[str]) -> str:
 
 def parse_review(text: str, workspace: str) -> tuple[str, list[dict]]:
     """Split Codex's review message into (summary, findings)."""
-    # "Full review comments:" normally; "Review comment:" when there is only one.
     heading = FINDINGS_HEADING_RE.search(text)
     summary, rest = (text[: heading.start()], text[heading.end():]) if heading else (text, "")
     findings: list[dict] = []
@@ -104,8 +94,6 @@ def parse_review(text: str, workspace: str) -> tuple[str, list[dict]]:
         elif current is not None:
             current["body"].append(line)
     for finding in findings:
-        # A suggestion block is always pulled out, even when the input is off, so
-        # a stray one can never reach GitHub as an applicable suggestion.
         finding["body"], finding["suggestion"] = suggestions.extract(dedent_body(finding["body"]))
     return summary.strip(), findings
 
@@ -121,13 +109,9 @@ def parse_priority(value: str, default: int | None) -> int | None:
     return int(number)
 
 
-# GitHub API ------------------------------------------------------------------
 
 
-# Transient failures worth another attempt. GitHub drops idle connections and
-# answers 5xx or 429 under load; a review shouldn't die on one of those.
 RETRY_STATUSES = {429, 500, 502, 503, 504}
-# Statuses where GitHub has not acted on the request, so even a POST is safe to repeat.
 NOT_PROCESSED = {429, 503}
 RETRY_DELAYS = (2, 5, 10)
 
@@ -160,7 +144,6 @@ def github(method: str, path: str, token: str, payload: dict | None = None, url:
                 raise
             reason = f"HTTP {error.code}"
         except (urllib.error.URLError, http.client.HTTPException, ConnectionError, TimeoutError) as error:
-            # A dropped connection may have reached GitHub, so only repeat what's safe.
             if delay is None or not is_idempotent(method, url):
                 raise
             reason = type(error).__name__
@@ -223,7 +206,6 @@ def hide_previous(repo: str, pr: str, token: str, keep_id: str = "", known: list
     return hidden
 
 
-# Rendering -------------------------------------------------------------------
 
 
 class Context:
@@ -238,19 +220,16 @@ class Context:
         if self.base.startswith("origin/"):
             self.base = self.base[len("origin/"):]
         if re.fullmatch(r"[0-9a-f]{40}", self.base):
-            self.base = self.base[:7]  # an incremental run reviews against a commit
+            self.base = self.base[:7]
         self.model = env.get("MODEL", "").strip()
         self.label = env.get("LABEL", "").strip()
         self.effort = env.get("REASONING_EFFORT", "").strip()
         self.tokens = env.get("USAGE_TEXT", "").strip()
-        # How much of the diff the reviewer actually read (see coverage.py).
         self.coverage = coverage.summary(coverage.load(env.get("COVERAGE_FILE", "").strip()))
         self.run_url = env.get("RUN_URL", "").strip()
         self.rerun_hint = env.get("RERUN_HINT", "").strip()
         self.note = ""
-        # Where the inline images come from, and whether there are any at all.
         self.icons = icon_set.Icons.from_env(env)
-        # Re-review awareness, filled in from the previous review's state.
         self.previous_sha = env.get("PREVIOUS_SHA", "").strip()
         self.scope_note = env.get("INCREMENTAL_NOTE", "").strip()
         self.resolved: list[dict] = []
@@ -258,7 +237,6 @@ class Context:
         self.still_open: set[str] = set()
         self.state = ""
         self.incremental = False
-        # The merge verdict, health score and confidence (scripts/verdict.py).
         self.health = None
 
     def commit_link(self) -> str:
@@ -391,7 +369,6 @@ def details(finding: dict, ctx: Context) -> str:
         f"{icon}{' ' if icon else ''}<b>P{finding['priority']}</b> \u00b7 {html.escape(finding['title'])}"
         f" \u00b7 <code>{html.escape(finding['path'])}:{span(finding)}</code>"
     )
-    # Never a native suggestion here: nothing in the body anchors to a diff line.
     fix = suggestion_block(finding, exact_range=True, native=False)
     parts = [location(finding, ctx), finding["body"]] + ([fix] if fix else [])
     return f"<details>\n<summary>{summary}</summary>\n\n" + "\n\n".join(p for p in parts if p) + "\n\n</details>"
@@ -413,7 +390,6 @@ def issues_table(findings: list[dict], ctx: Context, inline_ids: set[int] | None
         if finding.get("fingerprint") in ctx.still_open:
             title += " " + ctx.icons.marker("still-open", "still open")
         if finding.get("suggestion"):
-            # Marks the findings that come with a ready-made fix.
             title += " " + ctx.icons.marker("suggestion", "suggested fix")
         cells = [f"P{finding['priority']}", title, location(finding, ctx)]
         if graphics:
@@ -434,8 +410,6 @@ def body_markdown(summary: str, findings: list[dict], ctx: Context, inline_ids: 
         parts.append(verdicts.breakdown(ctx.health))
     parts.append(summary)
     if findings:
-        # With nothing inline (comment mode, or an inline review GitHub rejected)
-        # every row would say the same thing, so the column is left out.
         parts.append(issues_table(findings, ctx, inline_ids or None))
         detailed = [f for f in findings if id(f) not in inline_ids]
         if detailed:
@@ -500,7 +474,6 @@ def write_summary(summary: str, findings: list[dict], ctx: Context) -> None:
             out.write(body.replace(MARKER, "").strip() + "\n")
 
 
-# Main ------------------------------------------------------------------------
 
 
 def main() -> int:
@@ -525,7 +498,7 @@ def main() -> int:
 
     summary, all_findings = parse_review(text, env.get("REVIEW_WORKSPACE", ""))
     if not all_findings:
-        summary = text  # unstructured message, usually "no issues"
+        summary = text
     for finding in all_findings:
         finding["fingerprint"] = history.fingerprint(finding["path"], finding["title"])
     in_scope = [f for f in all_findings if paths.allows(f["path"])]
@@ -543,7 +516,6 @@ def main() -> int:
         notes.append(env["SIZE_NOTE"].strip())
     ctx.note = " ".join(notes)
 
-    # What the previous review reported, so this one can say what got fixed.
     plan = history.load_plan(env.get("STATE_FILE", ""))
     previous = plan.get("previous") or {}
     ctx.previous_sha = ctx.previous_sha or previous.get("sha", "")
@@ -555,9 +527,6 @@ def main() -> int:
         print(f"Since {history.short(ctx.previous_sha)}: {len(ctx.resolved)} resolved, "
               f"{len(ctx.still_open)} still open, {len(ctx.carried)} not re-checked.")
 
-    # Should this be merged? Rule-based, from everything the run can see: the
-    # findings still open, what the pull request itself says, and how much of it
-    # this review actually covered.
     ctx.health = verdicts.assess(
         findings,
         ctx.carried,
@@ -579,7 +548,7 @@ def main() -> int:
 
     if mode != "none":
         if env.get("HIDE_PREVIOUS", "true").strip().lower() == "true":
-            known = plan.get("hide")  # read with the state above, so not listed again
+            known = plan.get("hide")
             print(f"Hid {hide_previous(repo, pr, token, env.get('STATUS_COMMENT_ID', ''), known)} earlier Codex comment(s).")
         if mode == "comment" or not findings:
             github("POST", f"/repos/{repo}/issues/{pr}/comments", token, {"body": body_markdown(summary, findings, ctx)})
@@ -590,7 +559,7 @@ def main() -> int:
         set_output("posted", "true")
         if ctx.resolved and env.get("RESOLVE_FIXED_THREADS", "true").strip().lower() == "true":
             fixed = {item["fp"] for item in ctx.resolved}
-            threads = plan.get("threads")  # read with the state above, so not listed again
+            threads = plan.get("threads")
             print(f"Resolved {history.resolve_threads(repo, pr, token, fixed, github, GRAPHQL, threads)} fixed thread(s).")
         if env.get("LABELS", "true").strip().lower() != "false":
             set_output("label", verdicts.apply_labels(repo, pr, token, ctx.health.verdict, github))
@@ -615,8 +584,6 @@ def post_review(repo: str, pr: str, token: str, summary: str, findings: list[dic
     comments = []
     for finding in inline:
         comment = {"path": finding["path"], "line": finding["end"], "side": "RIGHT"}
-        # A single-line finding always anchors exactly; a range only when its
-        # first line is in the diff too, otherwise the comment covers just the last.
         exact_range = finding["start"] == finding["end"]
         if finding["start"] < finding["end"] and finding["start"] in allowed[finding["path"]]:
             comment.update(start_line=finding["start"], start_side="RIGHT")
@@ -630,11 +597,6 @@ def post_review(repo: str, pr: str, token: str, summary: str, findings: list[dic
         "body": body_markdown(summary, findings, ctx, {id(f) for f in inline}),
         "comments": comments,
     }
-    # Two things GitHub can refuse: the review event (a repository may not let
-    # the Actions identity request changes, and nobody may request changes on
-    # their own pull request), and a line it will not anchor a comment to. Each
-    # is given up in turn rather than losing the review.
-    # Each pair is (what to send, what the next attempt gives up to get it posted).
     attempts = [] if event == "COMMENT" else [(payload, "requesting changes")]
     attempts.append((dict(payload, event="COMMENT"), "the inline anchors"))
     attempts.append((dict(payload, event="COMMENT", body=body_markdown(summary, findings, ctx),

@@ -40,23 +40,16 @@ STATE_PREFIX = "<!-- codex-pr-review-state "
 STATE_RE = re.compile(re.escape(STATE_PREFIX) + r"(\{.*?\})\s*-->", re.DOTALL)
 FINDING_PREFIX = "<!-- codex-pr-review-finding "
 FINDING_RE = re.compile(re.escape(FINDING_PREFIX) + r"([0-9a-f]+)\s*-->")
-# Words too common to tell two findings apart.
 STOPWORDS = frozenset(
     "a an and are as at be by can for from has have in into is it its may not of on or "
     "should that the their there these this to when where which will with without".split()
 )
-# Keep the marker small: one line per finding, titles clipped.
 TITLE_LIMIT = 120
-# Below this many entries a section is shown open rather than collapsed.
 COLLAPSE_FROM = 4
-# Token overlap (Jaccard) at which two titles on the same path are the same finding.
 SIMILAR_ENOUGH = 0.5
-# How many lines apart a previous finding and a new one can start and still
-# be the same finding (code shifts a little between commits).
 SAME_PLACE = 3
 
 
-# Fingerprints ----------------------------------------------------------------
 
 
 def title_tokens(title: str) -> frozenset:
@@ -78,7 +71,6 @@ def similarity(left: frozenset, right: frozenset) -> float:
     return len(left & right) / len(left | right)
 
 
-# State marker ----------------------------------------------------------------
 
 
 def entry(finding: dict) -> dict:
@@ -99,27 +91,18 @@ def state_marker(head_sha: str, findings: list, carried: list | None = None, con
     entries = [entry(f) for f in findings] + list(carried or [])
     payload = {"v": 1, "sha": head_sha, "findings": entries}
     if config:
-        # What the review was produced with, so the next run can tell whether
-        # asking again could say anything new (see rereview.py).
         payload["cfg"] = config
     if health is not None:
-        # The verdict and health score this review reached, so the next one can
-        # show the trend and a skipped re-review can repeat the answer.
         payload["vd"] = health.verdict
         payload["hs"] = health.score
     return STATE_PREFIX + json.dumps(payload, separators=(",", ":")) + " -->"
 
 
-# The settings that decide what a review says. Everything else (the heading, the
-# re-run hint, the sandbox, how the findings are rendered) can change without
-# making the same commit worth reviewing again.
 SETTINGS = (
     ("provider", "PROVIDER", "lower"),
     ("model", "MODEL", ""),
     ("effort", "REASONING_EFFORT", "lower"),
     ("base", "BASE_REF", ""),
-    # The resolved mode, so a single review never satisfies a request for a full
-    # one (and the other way round).
     ("review-mode", "REVIEW_MODE", "lower"),
     ("incremental", "INCREMENTAL", "lower"),
     ("suggestions", "SUGGESTIONS", "lower"),
@@ -153,8 +136,6 @@ def instructions(env: dict) -> str:
     try:
         return write_config.load_instructions(env)
     except SystemExit:
-        # A configured file that is not there: a real difference from any run
-        # that could read it, and write_config.py fails the run in a moment.
         return "\x00review-instructions-file-missing"
 
 
@@ -180,7 +161,6 @@ def strip_state(text: str) -> str:
     return FINDING_RE.sub("", STATE_RE.sub("", text or ""))
 
 
-# Reading the last review -----------------------------------------------------
 
 
 def paginate(path: str, token: str, call) -> list:
@@ -218,11 +198,10 @@ def latest_state(repo: str, pr: str, token: str, call, items: list | None = None
     dated.sort(key=lambda found: found[0])
     state = dict(dated[-1][1])
     if dated[-1][2]:
-        state["url"] = dated[-1][2]  # where to send a reader who asks again
+        state["url"] = dated[-1][2]
     return state
 
 
-# Classification --------------------------------------------------------------
 
 
 def _match(previous: dict, findings: list, claimed: set | None = None) -> dict | None:
@@ -256,9 +235,6 @@ def _match_by_place(previous: dict, findings: list, claimed: set) -> dict | None
         if not start:
             continue
         if id(finding) in claimed:
-            # An older copy of a finding already matched (earlier runs can leave
-            # several rewordings of one bug in the state): only inside its own
-            # lines, so a fixed neighbour one line away can't hide behind it.
             if start <= line <= end:
                 return finding
         elif start - SAME_PLACE <= line <= end + SAME_PLACE:
@@ -276,8 +252,6 @@ def classify(previous: list, findings: list, changed_files: list | None = None):
     """
     touched = None if changed_files is None else {p for p in changed_files}
     resolved, carried, still_open = [], [], set()
-    # Round one: exact and reworded-title matches claim their findings; round
-    # two: what's left may match by place, so a neighbour can't be claimed twice.
     claimed, matches = set(), {}
     for index, item in enumerate(previous or []):
         match = _match(item, findings, claimed)
@@ -301,7 +275,6 @@ def classify(previous: list, findings: list, changed_files: list | None = None):
     return resolved, carried, still_open
 
 
-# Rendering -------------------------------------------------------------------
 
 
 def entry_link(item: dict, ctx) -> str:
@@ -334,8 +307,6 @@ def resolved_section(resolved: list, carried: list, ctx) -> str:
             [f"- {mark}~~{item.get('title', '')}~~ \u00b7 {entry_link(item, ctx)}" for item in resolved],
         ))
     if carried:
-        # Incremental passes skip untouched files; full passes read them, but a
-        # finding in an unchanged file can't have been fixed.
         heading = "Still open, not re-checked" if getattr(ctx, "incremental", False) else "Still open, file unchanged"
         blocks.append(_section(
             f"{heading} ({len(carried)})",
@@ -344,7 +315,6 @@ def resolved_section(resolved: list, carried: list, ctx) -> str:
     return "\n\n".join(blocks)
 
 
-# Resolving inline threads ----------------------------------------------------
 
 
 THREADS_QUERY = """
@@ -411,7 +381,6 @@ def resolve_threads(repo: str, pr: str, token: str, fingerprints: set, call, gra
     return resolved
 
 
-# Planning the run ------------------------------------------------------------
 
 
 def git(*args: str) -> tuple[int, str]:
@@ -499,8 +468,6 @@ def main(action: str) -> int:
 
     env = os.environ
     repo, pr = env["GITHUB_REPOSITORY"], env["PR_NUMBER"]
-    # One read of the conversation for the whole run: the state marker below, the
-    # comments publish_review.py collapses, and the threads it resolves.
     bundle = pr_state.fetch(repo, pr, env.get("GH_TOKEN", ""), github, GRAPHQL)
     result = plan(dict(env), github, bundle)
     if bundle:
@@ -527,6 +494,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else ""))
     except (urllib.error.URLError, KeyError, OSError) as error:
-        # Re-review awareness is a nicety: a full review is always a safe fallback.
         print(f"::warning::Could not read earlier Codex reviews: {error}")
         sys.exit(0)

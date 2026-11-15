@@ -6,7 +6,6 @@ description: >-
 author: Piyush Gambhir
 
 inputs:
-  # Model and provider
   provider:
     description: "Where the model runs: `openai` (OpenAI API key) or `bedrock` (Amazon Bedrock via GitHub OIDC)."
     default: openai
@@ -29,7 +28,6 @@ inputs:
     description: "Codex's Bedrock provider: `amazon-bedrock-runtime` (inference profiles such as `us.openai.gpt-6-sol`) or `amazon-bedrock` (Mantle, in-region IDs such as `openai.gpt-6-sol`)."
     default: amazon-bedrock-runtime
 
-  # What to review
   base-ref:
     description: "Git ref to review against, e.g. `origin/main`. Must exist in the checkout (use `fetch-depth: 0`)."
     required: true
@@ -73,7 +71,6 @@ inputs:
     description: "How long all the passes of a full review may take together. Passes that do not start in time are reported as uncovered. Keep the job's `timeout-minutes` above this."
     default: "20"
 
-  # Review behaviour
   review-instructions:
     description: "Extra review guidelines for Codex, e.g. what to prioritise or ignore in this repository."
     default: ""
@@ -105,7 +102,6 @@ inputs:
     description: "Review even when `skip-unchanged` would skip, e.g. because the request asked for a fresh review with `force`."
     default: "false"
 
-  # Output
   post-mode:
     description: "`review` (issues table plus inline comments), `comment` (one comment with the issues table) or `none` (outputs and job summary only)."
     default: review
@@ -146,7 +142,6 @@ inputs:
     description: "Token used to post (needs `pull-requests: write`). Use a GitHub App token to post under your own bot name and avatar."
     default: ${{ github.token }}
 
-  # Advanced
   pricing:
     description: "JSON override for the built-in price table, per 1M tokens as `{\"model\": [input, cached-input, output]}`, e.g. `{\"my-model\": [2, 0.2, 10]}`."
     default: ""
@@ -287,8 +282,6 @@ runs:
           echo "label=$label"
         } >> "$GITHUB_OUTPUT"
 
-    # Runs before anything is installed or posted, so an oversized pull request
-    # costs nothing beyond one `git diff --numstat`.
     - name: Check pull request size
       id: guard
       shell: bash
@@ -308,8 +301,6 @@ runs:
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
         MAX_CHANGED_LINES: ${{ inputs.max-changed-lines }}
         LARGE_PR: ${{ inputs.large-pr }}
-        # Resolved here, where the changed-line count already exists: `auto` and
-        # `large-pr: full` both need it to decide between single and full.
         REVIEW_MODE: ${{ inputs.review-mode }}
         POST_MODE: ${{ inputs.post-mode }}
         ICONS: ${{ inputs.icons }}
@@ -324,12 +315,6 @@ runs:
           fi
         fi
 
-    # Reads the state marker in the last Codex review on this pull request, so
-    # this run can report what got fixed and, with `incremental`, review only
-    # the commits pushed since then. It runs before anything is posted, so the
-    # whole conversation is read once (one GraphQL call), and what the steps
-    # below need from it - the comments to collapse, the threads to resolve -
-    # travels in the plan file instead of being listed again.
     - name: Read the previous review
       id: history
       if: steps.guard.outputs.skip != 'true' && inputs.post-mode != 'none'
@@ -344,8 +329,6 @@ runs:
         STATE_FILE: ${{ runner.temp }}/codex-review-state.json
       run: python3 "$GITHUB_ACTION_PATH/scripts/history.py" plan
 
-    # Nothing has been installed or posted yet, so a commit that already has a
-    # review with these settings costs one GraphQL call and one comment.
     - name: Skip an unchanged re-review
       id: rereview
       if: steps.guard.outputs.skip != 'true' && inputs.post-mode != 'none' && inputs.skip-unchanged == 'true'
@@ -366,8 +349,6 @@ runs:
         STATE_FILE: ${{ runner.temp }}/codex-review-state.json
         SKIP_UNCHANGED: ${{ inputs.skip-unchanged }}
         FORCE: ${{ inputs.force }}
-        # The settings the digest covers; publish_review.py writes it from the
-        # same variables, so the two must stay in step.
         REVIEW_MODE: ${{ steps.guard.outputs.review-mode }}
         INCREMENTAL: ${{ inputs.incremental }}
         SUGGESTIONS: ${{ inputs.suggestions }}
@@ -400,9 +381,6 @@ runs:
         ICON_BASE_URL: ${{ inputs.icon-base-url }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/status.py" start
 
-    # Created in progress so it shows in the PR's checks while Codex reviews,
-    # and completed after publishing. With GITHUB_TOKEN it joins this
-    # workflow's own check suite instead of getting a suite of its own.
     - name: Start check run
       id: check
       if: steps.guard.outputs.skip != 'true' && steps.rereview.outputs.skipped != 'true' && inputs.check-run == 'true'
@@ -420,11 +398,6 @@ runs:
         ICON_BASE_URL: ${{ inputs.icon-base-url }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/checks.py" start
 
-    # Installing Codex is the slow part of a run that is not the model call, and
-    # most of it is avoidable. The steps below try, in order: the install this
-    # runner (or the cache) already has, then the two setup actions and a real
-    # install. With the pinned codex-version and a warm cache, nothing but the
-    # restore runs.
     - name: Check the runner's Node and pnpm
       id: runtime
       if: steps.guard.outputs.skip != 'true' && steps.rereview.outputs.skipped != 'true'
@@ -440,10 +413,6 @@ runs:
         NODE_CURRENT="$node_current" PNPM_CURRENT="$pnpm_current" \
           python3 "$GITHUB_ACTION_PATH/scripts/install_plan.py" probe
 
-    # A pinned codex-version names its own cache key, with no pnpm needed to work
-    # it out, so the restore below can happen before anything is set up. Anything
-    # floating (`latest`, a range) leaves both outputs empty and is resolved
-    # further down, once pnpm is there to answer.
     - name: Cache key for a pinned Codex version
       id: pinned
       if: steps.guard.outputs.skip != 'true' && steps.rereview.outputs.skipped != 'true'
@@ -459,8 +428,6 @@ runs:
           { echo "codex-version="; echo "cache-key="; } >> "$GITHUB_OUTPUT"
         fi
 
-    # Restore only: the install is saved below as soon as it exists, so a failed
-    # or cancelled review still leaves the cache warm for the next run.
     - name: Restore the Codex CLI install
       id: codex-cache
       if: inputs.cache-install == 'true' && steps.pinned.outputs.cache-key != ''
@@ -469,10 +436,6 @@ runs:
         path: ${{ runner.temp }}/codex-cli
         key: ${{ steps.pinned.outputs.cache-key }}
 
-    # Whatever is in RUNNER_TEMP now (restored, or still there on a self-hosted
-    # runner) is only used when it runs and reports the version this run asked
-    # for. That it ran is also what makes the setup steps below unnecessary: the
-    # runner's Node just launched the reviewer, which is all Node is here for.
     - name: Is a usable Codex CLI already here?
       id: ready
       if: steps.pinned.outputs.codex-version != ''
@@ -489,10 +452,6 @@ runs:
           echo "ready=false" >> "$GITHUB_OUTPUT"
         fi
 
-    # `node-version: ''` has always meant "keep the runner's Node", and an open
-    # request such as `lts/*` is satisfied by any recent one. pnpm is only kept
-    # when Node is kept too, since a pnpm installed against the runner's own Node
-    # cannot be trusted once setup-node replaces it.
     - name: Set up Node.js
       if: steps.runtime.outputs.setup-node == 'true' && steps.ready.outputs.ready != 'true'
       uses: actions/setup-node@v7
@@ -501,14 +460,10 @@ runs:
 
     - name: Set up pnpm
       if: steps.runtime.outputs.setup-pnpm == 'true' && steps.ready.outputs.ready != 'true'
-      uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
       with:
         version: ${{ inputs.pnpm-version }}
 
-    # The cache key has to name the version that will actually be installed, and
-    # for a floating one only pnpm can say which that is: its minimum release age,
-    # a supply-chain delay, means `latest` is usually not the newest published
-    # release. Resolution reads the registry's metadata and downloads nothing.
     - name: Resolve a floating Codex version
       id: resolved
       if: steps.guard.outputs.skip != 'true' && steps.rereview.outputs.skipped != 'true' && steps.pinned.outputs.cache-key == '' && steps.ready.outputs.ready != 'true'
@@ -533,11 +488,6 @@ runs:
         path: ${{ runner.temp }}/codex-cli
         key: ${{ steps.resolved.outputs.cache-key }}
 
-    # Installed into RUNNER_TEMP with install scripts disabled, so nothing from
-    # the pull request can influence the reviewer binary. pnpm installs the
-    # platform binary through Codex's optional dependencies. The version check is
-    # repeated here for the restore above, which a floating version only reaches
-    # at this point.
     - name: Install Codex CLI
       id: install
       if: steps.guard.outputs.skip != 'true' && steps.rereview.outputs.skipped != 'true' && steps.ready.outputs.ready != 'true'
@@ -560,8 +510,6 @@ runs:
         "$codex" --version
         echo "reused=false" >> "$GITHUB_OUTPUT"
 
-    # Errors here are only warnings (a key another run saved first, no cache
-    # service), so a review is never lost to the cache.
     - name: Save the Codex CLI install
       if: steps.install.outputs.reused == 'false' && inputs.cache-install == 'true' && (steps.pinned.outputs.cache-key || steps.resolved.outputs.cache-key) != ''
       uses: actions/cache/save@v6
@@ -569,12 +517,10 @@ runs:
         path: ${{ runner.temp }}/codex-cli
         key: ${{ steps.pinned.outputs.cache-key || steps.resolved.outputs.cache-key }}
 
-    # Credentials are returned as outputs, not exported to the job, so only the
-    # review step below ever sees them.
     - name: Assume the Bedrock role (OIDC)
       id: aws
       if: steps.guard.outputs.skip != 'true' && steps.rereview.outputs.skipped != 'true' && inputs.provider == 'bedrock'
-      uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
+      uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
       with:
         role-to-assume: ${{ inputs.aws-role-to-assume }}
         aws-region: ${{ inputs.aws-region }}
@@ -605,7 +551,6 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        # Only the selected provider's credentials are set; the others are empty.
         CODEX_API_KEY: ${{ inputs.provider == 'openai' && inputs.openai-api-key || '' }}
         AWS_REGION: ${{ inputs.aws-region }}
         AWS_ACCESS_KEY_ID: ${{ steps.aws.outputs.aws-access-key-id }}
@@ -613,9 +558,6 @@ runs:
         AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
         CODEX_HOME: ${{ runner.temp }}/codex-home
         BASE_REF: ${{ steps.history.outputs.review-base || inputs.base-ref }}
-        # A full review runs one pass per shard of the diff, so the loop, the
-        # synthetic bases and the merge live in full_review.py; the single-pass
-        # path below is unchanged.
         REVIEW_MODE: ${{ steps.guard.outputs.review-mode }}
         REVIEW_FILE: ${{ runner.temp }}/codex-review.md
         EVENTS_FILE: ${{ runner.temp }}/codex-review-events.jsonl
@@ -655,10 +597,6 @@ runs:
           exit 1
         fi
 
-    # Review mode reports zero usage on turn.completed, so the real counts come
-    # from the session rollout Codex just wrote. A full review writes one rollout
-    # per pass, in the homes listed in CODEX_HOMES_FILE, and the cost is all of
-    # them together.
     - name: Measure token usage and cost
       id: usage
       if: steps.guard.outputs.skip != 'true' && steps.rereview.outputs.skipped != 'true'
@@ -670,9 +608,6 @@ runs:
         PRICING: ${{ inputs.pricing }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/usage.py"
 
-    # What the reviewer actually read, out of the session rollouts. A full review
-    # has already written the file; a single one is measured here, so both modes
-    # publish the same coverage contract.
     - name: Measure review coverage
       id: coverage
       if: steps.guard.outputs.skip != 'true' && steps.rereview.outputs.skipped != 'true'
@@ -683,8 +618,6 @@ runs:
         CODEX_HOMES_FILE: ${{ runner.temp }}/codex-review-homes.txt
         COVERAGE_FILE: ${{ runner.temp }}/codex-review-coverage.json
         REVIEW_MODE: ${{ steps.guard.outputs.review-mode }}
-        # The base the review actually ran against, so an incremental run is
-        # measured against the files it was asked to look at.
         BASE_REF: ${{ steps.history.outputs.review-base || inputs.base-ref }}
         REVIEW_WORKSPACE: ${{ github.workspace }}/${{ inputs.working-directory }}
         INCLUDE_PATHS: ${{ inputs.include-paths }}
@@ -718,10 +651,7 @@ runs:
         LABELS: ${{ inputs.labels }}
         REVIEW_EVENT: ${{ inputs.review-event }}
         SUMMARY_FILE: ${{ runner.temp }}/codex-review-summary.md
-        # The merge verdict, health score and confidence, for the check run below.
         HEALTH_FILE: ${{ runner.temp }}/codex-review-health.json
-        # How much of the pull request was actually reviewed: shown in the meta
-        # line, and it sets the confidence (without a report, the size guard below).
         COVERAGE_FILE: ${{ runner.temp }}/codex-review-coverage.json
         CHANGED_LINES: ${{ steps.guard.outputs.changed-lines }}
         MAX_CHANGED_LINES: ${{ inputs.max-changed-lines }}
@@ -735,9 +665,6 @@ runs:
         SIZE_NOTE: ${{ steps.guard.outputs.note }}
         ICONS: ${{ inputs.icons }}
         ICON_BASE_URL: ${{ inputs.icon-base-url }}
-        # The settings digest the posted review carries, so the next run can tell
-        # whether asking again could say anything new. Same variables as the
-        # skip-unchanged step above.
         PROVIDER: ${{ inputs.provider }}
         REVIEW_MODE: ${{ steps.guard.outputs.review-mode }}
         INCREMENTAL: ${{ inputs.incremental }}
@@ -745,8 +672,6 @@ runs:
         REVIEW_INSTRUCTIONS_FILE: ${{ inputs.review-instructions-file }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/publish_review.py"
 
-    # The review is posted even when fail-on-priority fails the step above, so
-    # the progress note is cleared whenever a review actually went up.
     - name: Clear progress note
       if: always() && steps.publish.outputs.posted == 'true'
       shell: bash
@@ -765,8 +690,6 @@ runs:
         TRIGGER_COMMENT_ID: ${{ inputs.trigger-comment-id }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/status.py" done
 
-    # Written even when fail-on-priority failed the publish step, so the
-    # findings can still be uploaded to code scanning.
     - name: Write SARIF
       id: sarif
       if: always() && inputs.sarif-file != '' && steps.publish.outputs.findings-file != ''
@@ -803,10 +726,6 @@ runs:
         ICON_BASE_URL: ${{ inputs.icon-base-url }}
       run: python3 "$GITHUB_ACTION_PATH/scripts/checks.py" finish
 
-    # A cancelled run is normally one a newer request superseded (the review job
-    # cancels in progress per pull request), so its progress note is stale: it is
-    # removed rather than left claiming a review is running, and the newer run
-    # posts its own. No failure note goes up, because nothing failed.
     - name: Remove the progress note (cancelled)
       if: cancelled() && steps.status.outputs.status-comment-id != '' && steps.publish.outputs.posted != 'true'
       shell: bash
@@ -821,8 +740,6 @@ runs:
         REASONING_EFFORT: ${{ inputs.reasoning-effort }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         STATUS_COMMENT_ID: ${{ steps.status.outputs.status-comment-id }}
-        # No reaction: the request was not answered, the run that replaced this
-        # one will answer it.
         TRIGGER_COMMENT_ID: ""
       run: python3 "$GITHUB_ACTION_PATH/scripts/status.py" done
 

@@ -50,26 +50,19 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import filters  # noqa: E402
 import shards  # noqa: E402
 
-# Commands that put a file's contents in front of the model.
 READ_COMMANDS = frozenset((
     "cat", "bat", "nl", "head", "tail", "sed", "awk", "less", "more", "view",
     "od", "xxd", "strings", "pr", "tac",
 ))
-# Commands that show a diff, so every file in the output has been inspected.
 DIFF_SUBCOMMANDS = frozenset(("diff", "show", "log", "diff-tree"))
-# ... unless the diff was asked for as a summary, which only names the files.
 SUMMARY_FLAGS = frozenset((
     "--stat", "--numstat", "--shortstat", "--dirstat", "--summary",
     "--name-only", "--name-status", "--compact-summary", "--raw", "-s",
 ))
-# Tool calls that read a file directly rather than through a shell.
 READ_TOOLS = ("read_file", "readfile", "view_file", "open_file", "read_text_file", "cat_file")
 PATH_KEYS = ("path", "file_path", "filename", "file", "abs_path", "absolute_path", "target_file")
-# Shell wrappers: the command itself is the last argument.
 SHELL_FLAGS = ("-lc", "-c", "-lic", "-ic", "--")
-# `cmd:"..."` inside the JavaScript the `exec` tool takes.
 EXEC_CMD_RE = re.compile(r'"?cmd"?\s*:\s*("(?:[^"\\]|\\.)*")')
-# The headers that name a file inside a unified diff.
 DIFF_HEADER_RE = re.compile(
     r"^(?:diff --git a/(?P<a>[^\r\n]+?) b/(?P<b>[^\r\n]+)"
     r"|\+\+\+ b/(?P<plus>[^\t\r\n]+)"
@@ -86,11 +79,9 @@ class Record:
         self.command = command or ""
         self.output = output or ""
         self.root = root or ""
-        # Paths a structured event named outright, with no command to parse.
         self.direct = list(direct or [])
 
 
-# Reading the rollouts ---------------------------------------------------------
 
 
 def _text(value) -> str:
@@ -235,7 +226,6 @@ def records(sessions: list) -> list:
     return found
 
 
-# Matching paths ---------------------------------------------------------------
 
 
 def _index(candidates) -> dict:
@@ -379,14 +369,12 @@ def inspected(found: list, candidates, roots: list | None = None,
                 whole_diff = whole_diff or everything
                 showed_diff = showed_diff or everything or bool(paths)
         if showed_diff:
-            # What the diff really showed, which a truncated one stops short of.
             seen |= diff_files(record.output, candidates, by_name, where)
             if whole_diff and not record.output:
-                seen |= scope  # nothing recorded, so trust the command
+                seen |= scope
     return seen & candidates
 
 
-# The coverage file ------------------------------------------------------------
 
 
 def report(mode: str, total, inspected_paths, shard_count: int = 1, passes: int = 1) -> dict:
@@ -483,6 +471,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except (OSError, ValueError, KeyError, shards.GitError) as error:
-        # Coverage is a measurement of the review, never a reason to lose one.
         print("::warning::Could not measure review coverage: %s" % error)
         sys.exit(0)

@@ -14,8 +14,6 @@ import gitrepo  # noqa: E402
 import publish_review  # noqa: E402
 import shards  # noqa: E402
 
-# A stand-in for the Codex CLI: it runs the diff it was given, records that the
-# way a real rollout does, and reports one finding in the first file it sees.
 FAKE_CODEX = '''#!/usr/bin/env python3
 import json, os, pathlib, subprocess, sys
 
@@ -98,7 +96,7 @@ class InstructionsTest(unittest.TestCase):
             home = pathlib.Path(full_review.pass_home(str(template), pathlib.Path(tmp) / "p1",
                                                      "Shard note."))
             self.assertTrue((home / "auth.json").is_file())
-            self.assertFalse((home / "sessions").exists())  # no other pass's rollouts
+            self.assertFalse((home / "sessions").exists())
             self.assertIn("Shard note.", (home / "config.toml").read_text(encoding="utf-8"))
 
 
@@ -113,9 +111,6 @@ class MergeTest(unittest.TestCase):
         return one
 
     def test_an_empty_cross_pass_does_not_leak_its_heading(self):
-        # Codex writes "Full review comments: None." when a pass has nothing; the
-        # merged review must still have exactly one findings heading, with the
-        # per-area summaries in the summary part.
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
             review = pathlib.Path(tmp, "cross.md")
@@ -150,7 +145,6 @@ class MergeTest(unittest.TestCase):
         right = self.job("shard-2", [finding("a.ts", "Unchecked index access on the second page",
                                              start=400)])
         self.assertEqual(len(full_review.merge([left, right])), 2)
-        # The same wording nearby is one issue two passes both noticed.
         near = self.job("shard-2", [finding("a.ts", "Unchecked index access on the second page",
                                             start=14)])
         self.assertEqual(len(full_review.merge([left, near])), 1)
@@ -312,14 +306,12 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(report["uncovered"], [])
         self.assertTrue(report["complete"])
         self.assertEqual(report["shards"], 2)
-        # Two shard passes plus the cross-cutting one.
         self.assertEqual(report["passes"], 3)
 
         review = (self.root / "codex-review.md").read_text(encoding="utf-8")
         summary, findings = publish_review.parse_review(review, "")
         self.assertIn("2 changed file(s) in 2 shard(s), 3 pass(es)", summary)
         self.assertEqual(sorted(f["path"] for f in findings), ["src/app.ts", "web/page.ts"])
-        # The paths are repository relative, whichever worktree found them.
         self.assertFalse(any(f["path"].startswith("/") for f in findings))
 
     def test_every_pass_has_its_own_home_and_they_are_all_billed(self):
@@ -331,7 +323,7 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(len(set(homes)), 3)
         import usage
         totals, requests = usage.collect([pathlib.Path(home) / "sessions" for home in homes])
-        self.assertEqual(totals["input_tokens"], 300)  # 100 per pass
+        self.assertEqual(totals["input_tokens"], 300)
         self.assertEqual(totals["output_tokens"], 60)
         self.assertEqual(len(requests), 3)
 
@@ -341,7 +333,6 @@ class EndToEndTest(unittest.TestCase):
         shard_reviews = [path / "review.md" for path in passes if path.name.startswith("shard-")]
         self.assertEqual(len(shard_reviews), 2)
         for review in shard_reviews:
-            # The stand-in reports how many files its diff showed: one each.
             self.assertIn("Reviewed 1 file(s).", review.read_text(encoding="utf-8"))
 
     def test_the_cross_cutting_pass_sees_the_whole_diff(self):

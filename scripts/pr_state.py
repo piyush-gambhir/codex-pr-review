@@ -34,8 +34,6 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import history  # noqa: E402
 from publish_review import MARKER, MARKER_PREFIX  # noqa: E402
 
-# `last: 100` on the two conversation lists: the newest state marker is the one
-# that counts, and GitHub caps a page at 100 nodes.
 PAGE = 100
 PR_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {
@@ -107,8 +105,6 @@ def hideable(pull: dict) -> list:
     for node in _nodes(comments):
         if _is_ours(node.get("body")):
             found.append({"node_id": node.get("id"), "id": node.get("databaseId")})
-    # Our inline comments always start their thread, so the first comment of
-    # each thread is the one that may carry the marker.
     for thread in _nodes(threads):
         for node in _nodes(thread.get("comments")):
             if _is_ours(node.get("body")):

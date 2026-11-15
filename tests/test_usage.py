@@ -9,8 +9,6 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 import usage  # noqa: E402
 
-# Captured from `codex exec review` 0.159.1: the exec thread (no usage) and the
-# review subagent thread (four requests), trimmed to the usage events.
 CODEX_HOME = pathlib.Path(__file__).parent / "fixtures" / "codex-home"
 SESSIONS = CODEX_HOME / "sessions"
 SOL = usage.PRICES["gpt-6-sol"]
@@ -25,7 +23,6 @@ class CollectTest(unittest.TestCase):
         self.assertEqual(totals["reasoning_output_tokens"], 47)
 
     def test_requests_are_not_double_counted(self):
-        # Each request appears as both a token_usage_record and a token_count.
         _, requests = usage.collect(SESSIONS)
         self.assertEqual([r["input_tokens"] for r in requests], [7881, 8502, 9705, 10527])
 
@@ -66,7 +63,6 @@ class PricingTest(unittest.TestCase):
         self.assertEqual(usage.load_prices("[1, 2]"), usage.PRICES)
 
     def test_cost_bills_fresh_cached_and_output_separately(self):
-        # 100k fresh at $2, 100k cached at $0.20, 10k output at $10 per 1M.
         cost = usage.request_cost(
             {"input_tokens": 200_000, "cached_input_tokens": 100_000, "output_tokens": 10_000}, SOL)
         self.assertAlmostEqual(cost, 0.2 + 0.02 + 0.1)
@@ -78,7 +74,6 @@ class PricingTest(unittest.TestCase):
         self.assertAlmostEqual(above, 272_001 * 4.0 / 1e6 + 1_000 * 15.0 / 1e6)
 
     def test_per_request_pricing_beats_pricing_the_totals(self):
-        # Four requests well under the threshold whose totals exceed it.
         requests = [{"input_tokens": 200_000, "cached_input_tokens": 0, "output_tokens": 0}] * 4
         totals = {"input_tokens": 800_000, "cached_input_tokens": 0, "output_tokens": 0}
         self.assertAlmostEqual(usage.estimate_cost(totals, requests, SOL), 1.6)

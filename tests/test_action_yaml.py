@@ -3,7 +3,7 @@ import unittest
 
 try:
     import yaml
-except ImportError:  # PyYAML isn't stdlib; GitHub's runners have it
+except ImportError:
     yaml = None
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -30,8 +30,6 @@ if yaml is not None:
 @unittest.skipIf(yaml is None, "PyYAML not installed")
 class ActionYamlTest(unittest.TestCase):
     def test_no_duplicate_keys(self):
-        # A merge once left two COVERAGE_FILE keys in one step's env: valid for
-        # PyYAML, rejected by GitHub. Load every action and workflow strictly.
         files = ["action.yml", "trigger/action.yml"] + sorted(
             str(p.relative_to(ROOT)) for p in (ROOT / ".github" / "workflows").glob("*.yml")
         ) + sorted(str(p.relative_to(ROOT)) for p in (ROOT / "examples").glob("*.yml"))

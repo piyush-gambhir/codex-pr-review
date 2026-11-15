@@ -18,7 +18,6 @@ SHA = "0123456789abcdef0123456789abcdef01234567"
 
 class ParseTest(unittest.TestCase):
     def test_real_codex_output(self):
-        # Captured from `codex exec review` 0.159.1 on a branch with two planted bugs.
         summary, findings = pr.parse_review((FIXTURES / "review-two-findings.md").read_text(), WORKSPACE)
         self.assertTrue(summary.startswith("The discount calculation"))
         self.assertEqual([f["priority"] for f in findings], [1, 2])
@@ -27,7 +26,6 @@ class ParseTest(unittest.TestCase):
         self.assertIn("divide `percent` by 100", findings[0]["body"])
 
     def test_prefixed_titles_and_relative_paths(self):
-        # Captured output where custom instructions added a word before the tag.
         _, findings = pr.parse_review((FIXTURES / "review-prefixed-relative.md").read_text(), WORKSPACE)
         self.assertEqual(len(findings), 3)
         self.assertTrue(all(f["title"].startswith("ZEBRA ") for f in findings))
@@ -35,7 +33,6 @@ class ParseTest(unittest.TestCase):
         self.assertEqual((findings[2]["start"], findings[2]["end"]), (11, 12))
 
     def test_single_finding_heading(self):
-        # With one finding Codex writes "Review comment:" instead of "Full review comments:".
         text = f"One issue.\n\nReview comment:\n\n- [P2] Guard empty input \u2014 {WORKSPACE}/a.py:4\n  Explain.\n"
         summary, findings = pr.parse_review(text, WORKSPACE)
         self.assertEqual(summary, "One issue.")
@@ -51,10 +48,8 @@ class ParseTest(unittest.TestCase):
         self.assertEqual((findings[0]["path"], findings[0]["body"]), ("a/b.py", "One.\nTwo."))
 
     def test_suggestion_blocks_survive_parsing(self):
-        # Captured from `codex exec review` 0.159.1 with the suggestions guidance on.
         _, findings = pr.parse_review((FIXTURES / "review-suggestions.md").read_text(), WORKSPACE)
         self.assertEqual([bool(f["suggestion"]) for f in findings], [True, False, True])
-        # The replacement keeps the source file's own two-space indentation.
         self.assertEqual(findings[0]["suggestion"], "  const discounted = subtotal - subtotal * (percent / 100);")
         self.assertNotIn("suggestion", findings[0]["body"])
         self.assertTrue(findings[0]["body"].endswith("before applying it."))
@@ -104,7 +99,7 @@ class RenderTest(unittest.TestCase):
     def test_verdict_alert_type_follows_the_worst_priority(self):
         def kind(*priorities):
             return pr.verdict([dict(self.findings[0], priority=p) for p in priorities]).splitlines()[0]
-        self.assertEqual(kind(), "> [!TIP]")  # clean
+        self.assertEqual(kind(), "> [!TIP]")
         self.assertEqual(kind(0), "> [!CAUTION]")
         self.assertEqual(kind(1), "> [!CAUTION]")
         self.assertEqual(kind(3, 1), "> [!CAUTION]")
@@ -147,7 +142,6 @@ class RenderTest(unittest.TestCase):
         self.assertIn("`gpt-6.1-sol` via OpenAI API", body)
         self.assertIn("[View run](https://github.com/o/r/actions/runs/9)", body)
         self.assertIn("Comment `@gpt review` to re-run.", body)
-        # No coverage file, no coverage claim.
         self.assertNotIn("Coverage", body)
 
     def test_the_meta_line_says_how_much_was_covered(self):
@@ -163,7 +157,6 @@ class RenderTest(unittest.TestCase):
                                         "passes": 1}), encoding="utf-8")
             self.assertIn("Coverage 4/30 files (single, 1 pass)",
                           pr.body_markdown("Summary.", [], ctx(COVERAGE_FILE=str(path))))
-            # A missing or unreadable file is simply not mentioned.
             self.assertNotIn("Coverage", pr.body_markdown(
                 "Summary.", [], ctx(COVERAGE_FILE=str(pathlib.Path(tmp, "nothing.json")))))
 
@@ -219,7 +212,7 @@ class SuggestionRenderTest(unittest.TestCase):
         text = pr.details(self.fixed, ctx())
         self.assertNotIn("```suggestion", text)
         self.assertIn("**Suggested fix**", text)
-        self.assertNotIn("(replaces", text)  # the location is already in the block
+        self.assertNotIn("(replaces", text)
 
     def test_table_marks_findings_that_carry_a_fix(self):
         rows = pr.issues_table(self.findings, ctx(), set()).splitlines()[2:]
@@ -270,7 +263,7 @@ class HidePreviousTest(unittest.TestCase):
             hidden = pr.hide_previous("o/r", "1", "t", "", [{"node_id": "IC_1", "id": 7},
                                                             {"node_id": "RC_1", "id": 8}])
         self.assertEqual(hidden, 2)
-        self.assertEqual([path for _, path, _ in log], ["", ""])  # two GraphQL mutations only
+        self.assertEqual([path for _, path, _ in log], ["", ""])
 
     def test_the_progress_note_is_never_collapsed(self):
         api, _ = self.calls()

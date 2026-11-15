@@ -28,12 +28,6 @@ LIGHT_BG = "#ffffff"
 DARK_BG = "#0d1117"
 MIN_CONTRAST = 3.0
 
-# Semantic name in scripts/icons.py -> (Octicon, fill).
-#
-# P0 to P3 are four different glyphs, not one glyph in four colours, so the
-# severity survives greyscale and colour blindness; the P-number is next to it
-# in every layout anyway. Everything procedural (where a finding was reported,
-# what a status note is about) is the one neutral grey.
 RECIPE = {
     "p0": ("alert-fill-16", "#da3633"),
     "p1": ("alert-16", "#ca5c14"),
@@ -50,7 +44,6 @@ RECIPE = {
 }
 
 
-# Contrast ---------------------------------------------------------------------
 
 
 def luminance(colour: str) -> float:
@@ -68,7 +61,6 @@ def contrast(one: str, other: str) -> float:
     return (max(first, second) + 0.05) / (min(first, second) + 0.05)
 
 
-# Building ---------------------------------------------------------------------
 
 
 def recolour(svg: str, fill: str) -> str:

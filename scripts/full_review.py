@@ -52,7 +52,6 @@ import shards  # noqa: E402
 import suggestions  # noqa: E402
 
 DEV_KEY = "developer_instructions = "
-# What each shard pass is told about the slice it was given.
 SHARD_NOTE = (
     "This review covers one part of a larger pull request: the diff you are "
     "shown is limited to these files:\n{files}\n\n"
@@ -61,7 +60,6 @@ SHARD_NOTE = (
     "Report findings only in the files listed above; another pass covers the "
     "rest, and a final pass covers issues that span areas."
 )
-# What the cross-cutting pass is told, so it does not repeat the shard passes.
 CROSS_NOTE = (
     "Every part of this pull request has already been reviewed on its own, with "
     "the whole repository available for context. Those reviews covered:\n{areas}\n\n"
@@ -78,7 +76,6 @@ FOLLOWUP_NOTE = (
     "These files are part of the pull request but were not read in the earlier "
     "passes. Review them in full."
 )
-# Codex writes its findings under this heading; publish_review.py reads it back.
 FINDINGS_HEADING = "Full review comments:"
 
 
@@ -93,7 +90,7 @@ class Pass:
         self.files = list(files)
         self.instructions = instructions
         self.base = ""
-        self.commit = ""  # the commit to check out, empty for the PR checkout
+        self.commit = ""
         self.cwd = ""
         self.home = ""
         self.review_file = ""
@@ -126,8 +123,6 @@ class Settings:
         self.events_file = env.get("EVENTS_FILE") or str(self.temp / "codex-review-events.jsonl")
         self.coverage_file = env.get("COVERAGE_FILE") or str(self.temp / "codex-review-coverage.json")
         self.homes_file = env.get("CODEX_HOMES_FILE") or str(self.temp / "codex-review-homes.txt")
-        # No floor: a tiny shard size is how the end-to-end harness forces real
-        # sharding on a small pull request, and max-shards bounds the cost anyway.
         self.shard_lines = number(env.get("SHARD_LINES"), 2500, 1)
         self.max_shards = number(env.get("MAX_SHARDS"), 24, 1)
         self.parallel = number(env.get("MAX_PARALLEL"), 4, 1)
@@ -143,7 +138,6 @@ def number(value, default: int, lowest: int = 0) -> int:
     return max(int(text), lowest)
 
 
-# Codex homes and instructions -------------------------------------------------
 
 
 def pass_home(template: str, target: pathlib.Path, extra: str) -> str:
@@ -175,7 +169,6 @@ def with_instructions(config: str, extra: str) -> str:
                 break
             lines[index] = DEV_KEY + json.dumps(current + "\n\n" + extra, ensure_ascii=False)
             return "\n".join(lines) + "\n"
-    # A top-level key has to come before the first table.
     at = next((index for index, line in enumerate(lines) if line.startswith("[")), len(lines))
     lines.insert(at, DEV_KEY + json.dumps(extra, ensure_ascii=False))
     return "\n".join(lines) + "\n"
@@ -188,7 +181,6 @@ def listed(paths: list, limit: int = 60) -> str:
     return "\n".join(shown)
 
 
-# Worktrees --------------------------------------------------------------------
 
 
 class Worktrees:
@@ -211,7 +203,7 @@ class Worktrees:
     def take(self, commit: str) -> tuple:
         slot = self.slots.get()
         path = self.root / ("slot-%d" % slot)
-        with self.lock:  # `git worktree add` writes shared administrative files
+        with self.lock:
             if str(path) in self.made:
                 shards.git(["checkout", "--detach", "--quiet", commit], str(path))
             else:
@@ -238,7 +230,6 @@ class Worktrees:
             pass
 
 
-# Running one pass -------------------------------------------------------------
 
 
 def run_codex(job: Pass, settings: Settings, seconds: int) -> None:
@@ -309,7 +300,6 @@ def prepare(job: Pass, settings: Settings, index_file: str, base: str, head: str
         job.files, base, head, settings.workspace, index_file, job.id)
 
 
-# Merging ----------------------------------------------------------------------
 
 
 def relative(path: str, roots: list) -> str:
@@ -331,9 +321,6 @@ def collect(job: Pass, roots: list | None = None) -> None:
     text = pathlib.Path(job.review_file).read_text(encoding="utf-8").strip()
     where = [job.cwd, os.path.realpath(job.cwd)] + list(roots or [])
     summary, findings = publish_review.parse_review(text, "")
-    # A pass with nothing to report still writes the heading ("Full review
-    # comments: None."); keep only the prose before it, or the merged review
-    # would carry two headings.
     heading = publish_review.FINDINGS_HEADING_RE.search(text)
     job.summary = (summary if findings else (text[: heading.start()] if heading else text)).strip()
     for finding in findings:
@@ -373,7 +360,6 @@ def merge(jobs: list) -> list:
     return kept
 
 
-# Up to this many per-area summaries are listed in the open; more are collapsed.
 VISIBLE_AREAS = 6
 
 
@@ -383,8 +369,6 @@ def render(findings: list, jobs: list, report: dict) -> str:
     lines = ["Full review: %d changed file(s) in %d shard(s), %d pass(es)." % (
         report.get("files_total", 0), report.get("shards", 0), len(done))]
     cross = next((job for job in jobs if job.kind == "cross" and job.ok()), None)
-    # What each area's pass found leads, since that describes the pull request;
-    # the cross-cutting pass follows as one line when it had nothing to add.
     areas = ["- **%s**: %s" % (job.label, one_line(job.summary))
              for job in done if job.kind != "cross" and job.summary]
     if areas and len(areas) <= VISIBLE_AREAS:
@@ -417,7 +401,6 @@ def finding_block(finding: dict) -> str:
     span = str(finding["start"])
     if finding["end"] > finding["start"]:
         span = "%d-%d" % (finding["start"], finding["end"])
-    # The separator is the em dash publish_review.py's FINDING_RE looks for.
     head = "- [P%d] %s \u2014 %s:%s" % (
         finding["priority"], finding["title"], finding["path"], span)
     parts = [finding.get("body") or ""]
@@ -428,7 +411,6 @@ def finding_block(finding: dict) -> str:
     return head + ("\n" + indented if indented.strip() else "") + "\n"
 
 
-# The run ----------------------------------------------------------------------
 
 
 def shard_passes(plan: list) -> list:
@@ -454,7 +436,7 @@ def review_all(jobs: list, settings: Settings, trees: Worktrees, deadline: float
         slot = None
         try:
             prepare(job, settings, str(index_root / ("index-%s" % job.id)), base, head)
-            if job.commit:  # a shard pass reviews its own head commit in a worktree
+            if job.commit:
                 slot, job.cwd = trees.take(job.commit)
             run_codex(job, settings, left)
         except (shards.GitError, OSError) as error:
@@ -527,7 +509,6 @@ def main() -> int:
 
     sharded = len(jobs) > 1
     if not sharded:
-        # One shard is the whole pull request, so there is nothing to isolate.
         jobs = [Pass("whole", "cross", "whole pull request", files)]
     try:
         review_all(jobs, settings, trees, deadline, base, head, index_root)

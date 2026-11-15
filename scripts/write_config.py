@@ -16,8 +16,6 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import filters  # noqa: E402
 
-# Kept in the instructions so custom guidelines don't change the layout that
-# publish_review.py parses. \u2014 is the em dash Codex uses as a separator.
 FORMAT_GUARD = (
     "Keep Codex's standard review output format: a short summary, then a line "
     "'Full review comments:' followed by one entry per finding written as "
@@ -25,10 +23,6 @@ FORMAT_GUARD = (
     "on the following lines. Do not add prefixes before the priority tag."
 )
 
-# Asked for when the `suggestions` input is on. publish_review.py lifts the block
-# out of the finding and posts it as a GitHub suggestion when the inline comment
-# covers exactly the flagged lines, so the block must replace those lines and
-# nothing else.
 SUGGESTION_GUIDANCE = (
     "When a finding's fix is a small, self-contained replacement of the exact "
     "lines you flagged, end that finding's explanation with a fenced code block "
@@ -74,8 +68,6 @@ def build_config(env: dict[str, str]) -> str:
         blocks.append(f"Repository review guidelines:\n\n{instructions}")
     excluded = filters.parse_patterns(env.get("EXCLUDE_PATHS", ""))
     if excluded:
-        # Findings in these files are dropped when publishing anyway, so telling
-        # Codex up front saves it the effort. The filter is still what enforces it.
         listed = ", ".join(excluded)
         blocks.append(
             "Do not review files whose path matches any of these patterns, and "
@@ -89,7 +81,6 @@ def build_config(env: dict[str, str]) -> str:
         lines.append(f"developer_instructions = {toml_string(guidelines)}")
     extra = env.get("CODEX_CONFIG", "").strip()
     if extra:
-        # Top-level keys must come before any table, so extra config goes here.
         lines += ["", "# From the codex-config input", extra]
     lines += [
         "",

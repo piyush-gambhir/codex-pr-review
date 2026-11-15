@@ -41,8 +41,6 @@ from publish_review import (  # noqa: E402
     verdict,
 )
 
-# GitHub accepts at most 50 annotations per request, so the rest go in follow-up
-# PATCH calls, and caps the output summary at 65535 characters.
 ANNOTATION_BATCH = 50
 SUMMARY_LIMIT = 65535
 TITLE_LIMIT = 255
@@ -51,7 +49,6 @@ SUMMARY_NOTE = "\n\n<sub>Summary truncated; the full review is on the pull reque
 ANNOTATION_LEVEL = {0: "failure", 1: "failure", 2: "warning", 3: "notice"}
 
 
-# Mapping --------------------------------------------------------------------
 
 
 def annotation_level(priority: int) -> str:
@@ -104,7 +101,6 @@ def batches(items: list[dict], size: int = ANNOTATION_BATCH) -> list[list[dict]]
     return [items[i:i + size] for i in range(0, len(items), size)] or [[]]
 
 
-# Rendering ------------------------------------------------------------------
 
 
 def headline(findings: list[dict], health=None) -> str:
@@ -127,7 +123,6 @@ def summary_markdown(prose: str, findings: list[dict], ctx: Context, health=None
     return clamp("\n\n".join(p for p in parts if p), SUMMARY_LIMIT, SUMMARY_NOTE)
 
 
-# GitHub API -----------------------------------------------------------------
 
 
 def now() -> str:
@@ -142,7 +137,7 @@ def call(method: str, path: str, token: str, payload: dict):
         try:
             detail = error.read().decode("utf-8", "replace")[:300]
             error.close()
-        except (OSError, KeyError, ValueError):  # an error without a readable body
+        except (OSError, KeyError, ValueError):
             detail = str(error.reason)
         if error.code == 403:
             print(
@@ -181,8 +176,6 @@ def complete(repo: str, token: str, check_id: str, result: str, title: str, summ
              items: list[dict] | None = None) -> int:
     """Complete the check run, adding annotations 50 at a time."""
     path = f"/repos/{repo}/check-runs/{check_id}"
-    # Every request repeats title and summary: the API requires both whenever
-    # output is given, and annotations accumulate across the batches.
     output = {"title": clamp(title, TITLE_LIMIT), "summary": clamp(summary, SUMMARY_LIMIT, SUMMARY_NOTE)}
     completed = {"status": "completed", "conclusion": result, "completed_at": now()}
     sent = 0
@@ -195,7 +188,6 @@ def complete(repo: str, token: str, check_id: str, result: str, title: str, summ
     return sent
 
 
-# Main -----------------------------------------------------------------------
 
 
 def load_findings(path: str) -> list[dict] | None:
@@ -247,7 +239,6 @@ def main(action: str) -> int:
 
     findings = load_findings(env.get("FINDINGS_FILE", ""))
     if findings is None:
-        # The review or the publish step failed, so there is nothing to report.
         reason = status.failure_reason(env.get("EVENTS_FILE", ""))
         detail = f"\n\n```\n{reason}\n```" if reason else ""
         summary = (alert("CAUTION", ctx.icons.tagged("failed", "**The Codex review did not complete.**") + detail)

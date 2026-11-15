@@ -38,8 +38,6 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import filters  # noqa: E402
 
-# Identity for the synthetic commits, so they never depend on the runner's git
-# config and two runs of the same shard produce the same SHA.
 COMMIT_ENV = {
     "GIT_AUTHOR_NAME": "codex-pr-review",
     "GIT_AUTHOR_EMAIL": "codex-pr-review@localhost",
@@ -48,11 +46,7 @@ COMMIT_ENV = {
     "GIT_AUTHOR_DATE": "1000000000 +0000",
     "GIT_COMMITTER_DATE": "1000000000 +0000",
 }
-# `git ls-tree` takes the paths on the command line, so long shards are asked in
-# batches rather than risking the system's argument limit.
 BATCH = 200
-# Path segments and file names that mark a test file. Tests are shardable on
-# their own so they never crowd the source files out of a shard.
 TEST_SEGMENTS = frozenset(("test", "tests", "spec", "specs", "__tests__", "__mocks__", "testdata"))
 TEST_MARKERS = ("test", "tests", "spec")
 
@@ -67,7 +61,6 @@ class ChangedFile:
     def __init__(self, path: str, old_path: str = "", status: str = "M",
                  added: int = 0, deleted: int = 0, binary: bool = False):
         self.path = path
-        # Where the file was at the merge base; "" when the pull request adds it.
         self.old_path = old_path
         self.status = status
         self.added = added
@@ -87,8 +80,6 @@ class ChangedFile:
         parts = self.path.lower().split("/")
         if TEST_SEGMENTS & set(parts[:-1]):
             return True
-        # Every dotted part of the name except the extension, split on the usual
-        # separators: `a.test.ts` and `test_a.py` both say so in a different place.
         name = parts[-1].rsplit(".", 1)[0] if "." in parts[-1] else parts[-1]
         words = [word for dotted in name.split(".")
                  for chunk in dotted.split("-") for word in chunk.split("_")]
@@ -124,7 +115,6 @@ class Shard:
         return (common + "/*") if common else "%d files" % len(self.files)
 
 
-# Running git ------------------------------------------------------------------
 
 
 def git(args: list, cwd: str = ".", stdin: str = "", env: dict | None = None) -> str:
@@ -147,7 +137,6 @@ def merge_base(base_ref: str, cwd: str = ".") -> str:
     return found.splitlines()[0] if found else git(["rev-parse", base_ref], cwd).strip()
 
 
-# Reading the diff -------------------------------------------------------------
 
 
 def _numstat(base: str, head: str, cwd: str) -> dict:
@@ -166,7 +155,7 @@ def _numstat(base: str, head: str, cwd: str) -> dict:
         added, deleted = fields[0], fields[1]
         if len(fields) >= 3 and fields[2]:
             path, index = fields[2], index + 1
-        else:  # a rename: the two paths follow as their own records
+        else:
             path, index = tokens[index + 2], index + 3
         binary = added == "-" or deleted == "-"
         counts[path] = (0 if binary else int(added), 0 if binary else int(deleted), binary)
@@ -216,7 +205,6 @@ def changed_files(base: str, head: str = "HEAD", cwd: str = ".",
     return files
 
 
-# Planning ---------------------------------------------------------------------
 
 
 def _group_by_directory(files: list) -> list:
@@ -270,8 +258,6 @@ def plan(files: list, shard_lines: int = 2500, max_shards: int = 24,
     if not files:
         return []
     limit = max(int(shard_lines), 1)
-    # Sorted here as well as in changed_files, so a plan never depends on the
-    # order the caller happened to hold the files in.
     files = sorted(files, key=lambda item: item.path)
     source = [item for item in files if not (separate_tests and item.is_test())]
     tests = [item for item in files if separate_tests and item.is_test()]
@@ -279,13 +265,11 @@ def plan(files: list, shard_lines: int = 2500, max_shards: int = 24,
         groups = _pack(source, limit) + _pack(tests, limit)
         if max_shards <= 0 or len(groups) <= max_shards:
             break
-        # Too many passes: grow the shards until the plan fits the budget.
         grown = max(limit + 1, (sum(item.lines for item in files) // max_shards) + 1)
         limit = grown if grown > limit else limit * 2
     return [Shard(index, group) for index, group in enumerate(groups)]
 
 
-# Synthetic bases --------------------------------------------------------------
 
 
 def _ls_tree(commit: str, paths: list, cwd: str) -> dict:
@@ -324,7 +308,6 @@ def synthetic_base(files: list, base: str, head: str, cwd: str, index_file: str,
     restored = set(at_base)
     removed = set()
     for item in files:
-        # Anything the shard puts at HEAD that the merge base does not have.
         for path in (item.path, item.old_path):
             if path and path not in restored and path not in removed:
                 entries.append("0 %s\t%s" % ("0" * 40, path))

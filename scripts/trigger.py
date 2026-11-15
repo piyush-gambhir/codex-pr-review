@@ -32,11 +32,8 @@ from publish_review import github  # noqa: E402
 
 EFFORTS = ("low", "medium", "high", "xhigh")
 PROVIDERS = ("openai", "bedrock")
-# Asks for a review even when the commit already has one with these settings.
 FORCE_WORDS = ("force",)
-# Asks for a full review: every changed file, shard by shard (see full_review.py).
 FULL_WORDS = ("full",)
-# getCollaboratorPermissionLevel reports maintain and triage as write and read.
 WRITE_PERMISSIONS = ("admin", "maintain", "write")
 
 
@@ -113,11 +110,10 @@ def outputs(**values: object) -> None:
     if path:
         with open(path, "a", encoding="utf-8") as out:
             out.write(text)
-    else:  # local runs still show what a workflow would receive
+    else:
         sys.stdout.write(text)
 
 
-# Parsing ---------------------------------------------------------------------
 
 
 def parse_options(first_line: str, settings: Settings) -> tuple[str, str, bool, bool]:
@@ -125,8 +121,6 @@ def parse_options(first_line: str, settings: Settings) -> tuple[str, str, bool, 
     re-review: `@gpt review bedrock high full force`."""
     provider, effort = settings.provider, settings.effort
     force, full = settings.force, settings.full
-    # Known providers are recognised even when they aren't allowed, so asking
-    # for a forbidden one is refused rather than silently reviewed on the other.
     for word in first_line.strip()[len(settings.command):].lower().split():
         if word in PROVIDERS or word in settings.providers:
             provider = word
@@ -166,7 +160,6 @@ def build_request(settings: Settings, event: dict) -> Request:
         if event.get("action") != "labeled" or added != settings.label:
             raise Skip("label-mismatch")
         number = int((event.get("pull_request") or {}).get("number") or event.get("number") or 0)
-        # A label carries no options, so only the defaults are checked.
         provider, effort, force, full = parse_options(settings.command, settings)
         return Request(number, settings.actor, provider, effort, from_label=True,
                        force=force, full=full)
@@ -181,7 +174,6 @@ def build_request(settings: Settings, event: dict) -> Request:
     raise Skip("unsupported-event", f"Event '{settings.event_name}' does not trigger a review.")
 
 
-# Checks ----------------------------------------------------------------------
 
 
 def require_write_access(settings: Settings, actor: str) -> None:
@@ -191,7 +183,7 @@ def require_write_access(settings: Settings, actor: str) -> None:
     except urllib.error.HTTPError as error:
         if error.code != 404:
             raise
-        permission = "none"  # not a collaborator at all
+        permission = "none"
     if permission not in WRITE_PERMISSIONS:
         raise Skip("no-write-access", f"{actor} lacks write access; ignoring.")
 
@@ -215,7 +207,6 @@ def as_code(branches: list[str]) -> str:
     return " or ".join(f"`{branch}`" for branch in branches)
 
 
-# Best-effort feedback on the pull request ------------------------------------
 
 
 def reply(settings: Settings, number: int, body: str) -> None:
@@ -242,13 +233,12 @@ def remove_label(settings: Settings, number: int) -> None:
         print(f"::warning::Could not remove the '{settings.label}' label: {error}")
 
 
-# -----------------------------------------------------------------------------
 
 
 def main() -> int:
     settings = Settings(dict(os.environ))
     event = load_event(settings.event_path)
-    labelled: int = 0  # pull request whose trigger label should come off again
+    labelled: int = 0
     try:
         request = build_request(settings, event)
         if request.from_label and settings.remove_label:

@@ -55,7 +55,6 @@ class ConfidenceTest(unittest.TestCase):
     def test_a_nearly_complete_report_is_medium(self):
         self.assertEqual(v.coverage_confidence(
             {"complete": False, "files_total": 100, "files_inspected": 90})[0], "medium")
-        # `complete` with files left out is still only medium.
         self.assertEqual(v.coverage_confidence(
             {"complete": True, "files_total": 100, "files_inspected": 50})[0], "medium")
 
@@ -128,8 +127,6 @@ class ConfidenceCapTest(unittest.TestCase):
         health = self.combination([], "low")
         self.assertEqual(health.alert, v.INCOMPLETE_ALERT)
         self.assertIn("did not cover the whole pull request", health.note)
-        # Nothing was found, so the score is untouched: it grades the code, the
-        # confidence grades the review.
         self.assertEqual(health.score, 100)
 
     def test_a_real_finding_keeps_its_own_headline_and_alert(self):
@@ -151,7 +148,7 @@ class ScoreTest(unittest.TestCase):
 
     def test_caps_stop_nits_outranking_one_real_bug(self):
         nits = self.score([2] * 20 + [3] * 20)
-        self.assertEqual(nits, 80)  # -15 for the P2s, -5 for the P3s
+        self.assertEqual(nits, 80)
         self.assertGreaterEqual(nits, self.score([1]))
         self.assertGreater(nits, self.score([0]))
 
@@ -368,7 +365,7 @@ class LabelTest(unittest.TestCase):
         call, calls = self.api(fail=refused)
         with mock.patch("builtins.print") as printed:
             self.assertEqual(v.apply_labels("o/r", "1", "t", v.READY, call), "")
-        self.assertEqual(len(calls), 1)  # it gives up at the first refusal
+        self.assertEqual(len(calls), 1)
         warning = " ".join(str(c) for c in printed.call_args_list)
         self.assertIn("::warning::", warning)
         self.assertIn("issues: write", warning)
@@ -396,7 +393,6 @@ if __name__ == "__main__":
 
 class EmptyScopeTest(unittest.TestCase):
     def test_no_files_in_scope_is_not_a_partial_review(self):
-        # The coverage writer reports complete=false for an empty diff; nothing was missed.
         level, reason = v.coverage_confidence({"mode": "single", "complete": False, "files_total": 0,
                                                      "files_inspected": 0, "uncovered": [], "shards": 0, "passes": 1})
         self.assertEqual((level, reason), ("high", "no changed files in scope"))

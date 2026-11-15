@@ -1,5 +1,3 @@
-// Sample code used to test the action end to end: test PRs add deliberate
-// bugs here and request `@gpt review`.
 export interface LineItem {
   sku: string;
   unitPriceCents: number;

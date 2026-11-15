@@ -32,12 +32,6 @@ jobs:
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
           ./actionlint -color examples/*.yml .github/workflows/*.yml
 
-  # Runs the action for real up to the model call: size guard, Node and pnpm
-  # setup, the Codex install and config. A dummy key makes the review itself
-  # fail, which is expected; the checks below prove everything before it works
-  # on a real runner. Then it throws the install away and runs the action again,
-  # which proves the install cache: the second run restores it instead of
-  # downloading the CLI, and both durations are printed.
   action-smoke:
     runs-on: ubuntu-24.04
     steps:
@@ -85,7 +79,6 @@ jobs:
           test "$OUTCOME" = failure || { echo "expected the dummy key to fail the review, got $OUTCOME"; exit 1; }
           grep -qi "401\|unauthorized\|api key" "$RUNNER_TEMP/codex-review-events.jsonl"
 
-      # Fails the job when the action did not leave an entry under that key.
       - name: The install is in the cache
         uses: actions/cache/restore@v6
         with:

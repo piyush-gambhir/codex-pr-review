@@ -70,8 +70,6 @@ def main(action: str) -> int:
             github("DELETE", f"/repos/{repo}/issues/comments/{status_id}", token)
         react(repo, token, trigger_id, "rocket")
     elif action == "skip":
-        # The size guard decided not to review at all; there is no progress note
-        # yet, so this is the only thing the pull request gets.
         reason = (
             f"PR too large to review ({env.get('CHANGED_LINES', '?')} changed lines, "
             f"limit {env.get('MAX_CHANGED_LINES', '?')})."

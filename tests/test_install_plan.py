@@ -8,8 +8,6 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 import install_plan as plan  # noqa: E402
 
-# What `pnpm add --lockfile-only @openai/codex@latest` writes, trimmed. The
-# importer entry is the resolved version, which is what the cache key needs.
 LOCKFILE = """lockfileVersion: '9.0'
 
 settings:
@@ -137,7 +135,6 @@ class MainTest(unittest.TestCase):
         self.assertEqual(outputs, {"setup-node": "false", "setup-pnpm": "false"})
 
     def test_probe_sets_up_both_when_node_is_replaced(self):
-        # pnpm is not kept on its own: setup-node would move the Node under it.
         _, outputs = run("probe", NODE_VERSION="lts/*", NODE_CURRENT="v18.0.0",
                          PNPM_VERSION="12", PNPM_CURRENT="12.6.0")
         self.assertEqual(outputs, {"setup-node": "true", "setup-pnpm": "true"})
@@ -171,8 +168,6 @@ class MainTest(unittest.TestCase):
         self.assertEqual(outputs["cache-key"], "codex-cli-1-Linux-X64-0.158.0-pnpm12")
 
     def test_an_unresolvable_version_turns_the_cache_off(self):
-        # An empty cache key skips the restore and save steps, so a run can never
-        # restore one version's install under another version's key.
         _, outputs = run("key", CODEX_VERSION="latest", LOCKFILE="/nonexistent/pnpm-lock.yaml",
                          RUNNER_OS="Linux", RUNNER_ARCH="X64", PNPM_VERSION="12")
         self.assertEqual(outputs, {"codex-version": "latest", "cache-key": ""})

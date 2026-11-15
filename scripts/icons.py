@@ -27,21 +27,13 @@ from __future__ import annotations
 
 import re
 
-# The public repository the icons are published from.
 ACTION_REPO = "piyush-gambhir/codex-pr-review"
-# Fallback ref for the default icon URL. Release checklist: bump this to the tag
-# being released whenever `icons/` changes, before tagging (see CHANGELOG.md).
 PINNED_REF = "v1.3.0"
 CDN = "https://cdn.jsdelivr.net/gh/{repo}@{ref}/icons"
-# Refs that are safe to serve from: an immutable tag or a full commit SHA.
 TAG_RE = re.compile(r"\Av\d+(?:\.\d+){0,2}\Z")
 SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")
-# Every image is rendered at the size GitHub uses for its own inline octicons.
 SIZE = 16
 
-# Semantic name -> (file in icons/, alt text). The alt text is what a screen
-# reader and a text-only client see, so it has to say what the icon means rather
-# than name the picture.
 CATALOGUE = {
     "p0": ("priority-p0.svg", "Critical"),
     "p1": ("priority-p1.svg", "High"),
