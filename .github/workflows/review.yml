@@ -1,40 +1,5 @@
 name: Codex review (reusable)
 
-# Trigger plus review in one call, so a consuming repository only needs:
-#
-#   on:
-#     issue_comment: { types: [created] }
-#     pull_request: { types: [labeled] }
-#   jobs:
-#     codex:
-#       permissions:
-#         contents: read
-#         pull-requests: write
-#         issues: write
-#         id-token: write
-#       uses: piyush-gambhir/codex-pr-review/.github/workflows/review.yml@v1
-#       with: { base-branches: main }
-#       secrets: inherit
-#
-# Callers must grant those permissions: a called workflow can only downgrade the
-# caller's GITHUB_TOKEN, never widen it, so anything the caller withholds is
-# simply missing here (id-token is only needed for the bedrock provider).
-#
-# Referencing this repository's own action at the ref the caller asked for:
-# `github.workflow_ref` and `github.workflow_sha` describe the *caller's*
-# workflow, and `./` resolves against the caller's checkout, so neither can name
-# the action that belongs with this file. The `job.workflow_*` contexts do: they
-# describe the workflow file defining the running job, which is this file. Every
-# job below therefore checks out `job.workflow_repository` at `job.workflow_sha`
-# and uses the action from that checkout, so `@v1.1.0` of this workflow runs
-# v1.1.0 of the action, a full-SHA pin runs that SHA, and a private copy of this
-# repository uses itself instead of the public one.
-# Trade-offs: `job.workflow_*` is not available on GitHub Enterprise Server (use
-# `examples/codex-review-standalone.yml` there), and a private copy needs the
-# `ACTION_REPO_TOKEN` secret, since the caller's GITHUB_TOKEN cannot read
-# another private repository. The newer `$/` self-repository syntax would remove
-# the checkout, but it is documented only for same-repository references, so it
-# is not usable from a workflow called by another repository yet.
 
 on:
   workflow_call:
@@ -160,8 +125,6 @@ on:
 jobs:
   trigger:
     name: Check request
-    # Cheap gate so stray comments never start a runner. The script checks the
-    # same things again (a little more forgivingly: it ignores leading blanks).
     if: >-
       (github.event_name == 'issue_comment'
         && github.event.issue.pull_request != null
@@ -172,8 +135,6 @@ jobs:
     runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
     permissions:
       contents: read
-      # Comments on a PR are pull-request resources: reacting to or replying on
-      # them needs pull-requests: write.
       pull-requests: write
       issues: write
     outputs:
@@ -216,21 +177,15 @@ jobs:
     needs: trigger
     if: needs.trigger.outputs.run == 'true'
     runs-on: ${{ startsWith(inputs.runs-on, '[') && fromJSON(inputs.runs-on) || inputs.runs-on }}
-    # A review that has not finished in this long is not going to: the model calls
-    # are the only slow steps, and they are billed for as long as they run. A full
-    # review keeps its own budget as well, so this is the outer limit.
     timeout-minutes: ${{ inputs.timeout-minutes }}
-    # One review at a time per pull request, and a newer request cancels the one
-    # in flight: that review is already out of date and still costing money. The
-    # cancelled run removes its own progress note and leaves no failure note.
     concurrency:
       group: codex-review-${{ needs.trigger.outputs.pr-number }}
       cancel-in-progress: true
     permissions:
       contents: read
-      pull-requests: write # post the review
-      issues: write # create and apply the verdict label (labels: true)
-      id-token: write # AWS OIDC (bedrock provider)
+      pull-requests: write
+      issues: write
+      id-token: write
     steps:
       - name: Mint GitHub App token (optional custom bot identity)
         id: app
@@ -251,8 +206,6 @@ jobs:
           token: ${{ secrets.ACTION_REPO_TOKEN || github.token }}
           persist-credentials: false
 
-      # Review guidelines come from the default branch, so a PR can't rewrite
-      # the rules it is reviewed against.
       - name: Checkout review guidelines from the default branch
         if: inputs.guidelines-path != ''
         uses: actions/checkout@v7
@@ -262,15 +215,12 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
-      # fetch-depth: 0 with no credentials left behind. A `filter: blob:none`
-      # partial clone is much cheaper but fetches blobs lazily, which needs a
-      # credential in the checkout Codex reads: see "Checkout cost" in the README.
       - name: Checkout PR head
         uses: actions/checkout@v7
         with:
           ref: ${{ needs.trigger.outputs.head-sha }}
           path: pr
-          fetch-depth: 0 # the review diffs against the merge base with the base branch
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Codex review (${{ needs.trigger.outputs.provider }}, ${{ needs.trigger.outputs.effort }})
@@ -291,12 +241,10 @@ jobs:
           trigger-comment-id: ${{ needs.trigger.outputs.comment-id }}
           skip-unchanged: ${{ inputs.skip-unchanged }}
           force: ${{ needs.trigger.outputs.force }}
-          # `@gpt review full` asks for a full review for this run only.
           review-mode: ${{ needs.trigger.outputs.full == 'true' && 'full' || inputs.review-mode }}
           max-changed-lines: ${{ inputs.max-changed-lines }}
           shard-lines: ${{ inputs.shard-lines }}
           rerun-hint: "Re-run: `${{ inputs.command }}` \u00b7 same commit again: `${{ inputs.command }} force` \u00b7 deeper: `${{ inputs.command }} high` \u00b7 every file: `${{ inputs.command }} full` \u00b7 on Bedrock: `${{ inputs.command }} bedrock`"
-          # Guidelines are optional: the file may not exist in the caller's repo.
           review-instructions-file: ${{ inputs.guidelines-path != '' && hashFiles(format('trusted/{0}', inputs.guidelines-path)) != '' && format('trusted/{0}', inputs.guidelines-path) || '' }}
           max-priority: ${{ inputs.max-priority }}
           fail-on-priority: ${{ inputs.fail-on-priority }}

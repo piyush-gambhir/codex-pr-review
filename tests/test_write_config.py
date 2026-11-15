@@ -5,7 +5,7 @@ import unittest
 
 try:
     import tomllib
-except ImportError:  # Python < 3.11: the config tests need a TOML parser
+except ImportError:
     tomllib = None
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))

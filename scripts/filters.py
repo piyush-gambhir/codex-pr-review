@@ -24,7 +24,6 @@ import re
 import subprocess
 import sys
 
-# Path globs -------------------------------------------------------------------
 
 
 @functools.lru_cache(maxsize=None)
@@ -40,7 +39,6 @@ def compile_pattern(pattern: str) -> re.Pattern:
     while index < size:
         char = pattern[index]
         if pattern[index:index + 3] == "**/":
-            # Zero or more leading segments, so the pattern also matches at the root.
             out.append("(?:[^/]*/)*")
             index += 3
         elif pattern[index:index + 2] == "**":
@@ -83,8 +81,6 @@ def matches(path: str, pattern: str) -> bool:
     regex = compile_pattern(pattern)
     if regex.match(path):
         return True
-    # A pattern with no separator also matches the file name anywhere in the
-    # tree, so `*.ts` covers `src/app/a.ts` the way .gitignore does.
     return "/" not in pattern and bool(regex.match(path.rsplit("/", 1)[-1]))
 
 
@@ -119,7 +115,6 @@ class PathFilter:
         return not any(matches(path, p) for p in self.exclude)
 
 
-# Size guard -------------------------------------------------------------------
 
 
 def git(args: list[str], cwd: str = ".") -> str:
@@ -185,13 +180,10 @@ def guard_decision(changed: int, limit: int | None, mode: str) -> tuple[bool, st
     if mode == "skip":
         return True, f"PR too large to review ({changed} changed lines, limit {limit})."
     if mode == "full":
-        # The full review covers it, so the size is not a caveat; the coverage
-        # line under the review says how much of it was actually read.
         return False, ""
     return False, f"Large PR: {changed} changed lines, over the {limit} line limit, so this review may be incomplete."
 
 
-# Review mode ------------------------------------------------------------------
 
 REVIEW_MODES = ("single", "full", "auto")
 

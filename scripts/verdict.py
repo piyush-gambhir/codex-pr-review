@@ -31,7 +31,6 @@ import pathlib
 import urllib.error
 import urllib.parse
 
-# Verdicts, worst last: the index is the severity, so gating is a comparison.
 READY = "ready"
 NITS = "nits"
 CHANGES = "changes-requested"
@@ -44,14 +43,8 @@ HEADLINE = {
     CHANGES: "Changes requested",
     BLOCKED: "Do not merge",
 }
-# GitHub's own alert blocks carry the verdict: it draws the octicon, the colour
-# and the border, so the headline looks like the rest of the pull request page.
 ALERT = {READY: "TIP", NITS: "NOTE", CHANGES: "WARNING", BLOCKED: "CAUTION"}
 
-# A clean or nits-only result the run cannot stand behind is not "ready": it is
-# reported as changes-requested, with a headline that says what is actually
-# wrong (the review, not the code) and a NOTE rather than a WARNING, because
-# nothing alarming was found.
 INCOMPLETE_HEADLINE = "Needs a full review"
 INCOMPLETE_ALERT = "NOTE"
 INCOMPLETE_NOTE = (
@@ -59,12 +52,8 @@ INCOMPLETE_NOTE = (
     "to call this mergeable."
 )
 
-# Points off per finding, and the most any one priority may take off in total.
-# One P1 costs 20; every nit in the world costs at most 20 as well (15 + 5), so
-# a pile of nits ties with one real bug and never beats it.
 WEIGHT = {0: 40, 1: 20, 2: 5, 3: 1}
 CAP = {0: 80, 1: 60, 2: 15, 3: 5}
-# What the pull request itself says, read with the run's one GraphQL call.
 SIGNAL_WEIGHT = {"checks": 10, "conflicts": 10, "draft": 5}
 SIGNAL_LABEL = {
     "checks": "Failing checks",
@@ -72,16 +61,10 @@ SIGNAL_LABEL = {
     "draft": "Draft pull request",
 }
 
-# Confidence thresholds, all documented in the README.
-# Share of the changed files a partial pass has to have inspected to be `medium`.
 COMPLETE_ENOUGH = 0.8
-# Share of `max-changed-lines` above which one pass is no longer `high`.
 NEAR_LIMIT = 0.75
-# What one pass is judged against when no `max-changed-lines` is configured.
 BIG_DIFF = 2000
 
-# The label this action puts on the pull request, per verdict: name, colour and
-# description. Created with these colours when the repository has no such label.
 LABELS = {
     READY: ("codex: ready", "0e8a16", "Codex review: ready to merge"),
     NITS: ("codex: nits", "fbca04", "Codex review: mergeable, with nits"),
@@ -92,7 +75,6 @@ LABELS = {
 EVENTS = ("COMMENT", "REQUEST_CHANGES")
 
 
-# The answer ------------------------------------------------------------------
 
 
 class Health:
@@ -163,7 +145,6 @@ class Health:
         )
 
 
-# Confidence ------------------------------------------------------------------
 
 
 def read_coverage(path: str) -> dict | None:
@@ -190,7 +171,6 @@ def coverage_confidence(report: dict) -> tuple:
     complete = bool(report.get("complete"))
     where = "%d/%d files inspected" % (seen, total) if total else "coverage reported"
     if total == 0:
-        # Nothing left to read after the path filters: nothing was missed either.
         return "high", "no changed files in scope"
     if complete and seen >= total:
         return "high", "full coverage, " + where
@@ -223,7 +203,6 @@ def confidence(coverage: dict | None = None, changed: int = 0, limit: int | None
     return size_confidence(changed, limit, incremental)
 
 
-# Score -----------------------------------------------------------------------
 
 
 def pr_signals(raw: dict | None) -> dict:
@@ -263,7 +242,6 @@ def score(rows: list) -> int:
     return max(0, min(100, 100 - sum(points for _, points in rows)))
 
 
-# Verdict ---------------------------------------------------------------------
 
 
 def from_priorities(priorities: list) -> str:
@@ -297,8 +275,6 @@ def assess(findings: list, carried: list | None = None, signals: dict | None = N
     level, reason = confidence(coverage, changed, limit, incremental)
     rows = deductions(priorities, pr_signals(signals))
     verdict = from_priorities(priorities)
-    # Confidence caps the answer: a clean or nits-only result from a review that
-    # did not cover the pull request cannot claim the pull request is mergeable.
     capped = level == "low" and verdict in (READY, NITS)
     previous = previous or {}
     before = previous.get("hs")
@@ -314,7 +290,6 @@ def assess(findings: list, carried: list | None = None, signals: dict | None = N
     )
 
 
-# Rendering -------------------------------------------------------------------
 
 
 def line(health: Health) -> str:
@@ -352,7 +327,6 @@ def breakdown(health: Health) -> str:
             + "\n\n<sub>" + BREAKDOWN_NOTE + "</sub>\n\n</details>")
 
 
-# Gating ----------------------------------------------------------------------
 
 
 def parse_threshold(value: str) -> str | None:
@@ -399,7 +373,6 @@ def parse_event(value: str, health: Health | None = None) -> str:
     return setting.upper()
 
 
-# Labels ----------------------------------------------------------------------
 
 
 def label_name(verdict: str) -> str:
@@ -419,7 +392,7 @@ def _request(call, method: str, path: str, token: str, payload: dict | None = No
         if code == 403:
             print("::warning::Cannot manage labels (403). Grant the job `issues: write` "
                   "(or `pull-requests: write`), or set labels: false.")
-        elif code not in (404, 422):  # 422: the label is already there; 404: it was not on the PR
+        elif code not in (404, 422):
             print("::warning::Label request failed (%s: HTTP %d)." % (method, code))
         return False, code
     except (urllib.error.URLError, OSError) as error:

@@ -29,7 +29,6 @@ import status  # noqa: E402
 import verdict as verdicts  # noqa: E402
 from publish_review import Context, alert, github, set_output  # noqa: E402
 
-# Why the review ran after all. Only "already-reviewed" skips.
 REASONS = {
     "forced": "force was asked for",
     "disabled": "skip-unchanged is off",
@@ -78,7 +77,6 @@ def note(ctx: Context, url: str, previous: dict | None = None) -> str:
     """The note that goes up instead of a review."""
     commit = ctx.commit_link() or "this commit"
     already = f"[a Codex review]({url})" if url else "a Codex review"
-    # Informational, not a warning: nothing is wrong, the answer already exists.
     headline = ctx.icons.tagged("skipped", f"**{ctx.title} skipped**")
     body = f"{headline}\n\n{commit} already has {already} with these settings, so it was not reviewed again."
     said = verdict_line(previous or {})
@@ -122,10 +120,9 @@ def main(action: str) -> int:
 
     print(f"::notice::Skipping the review: {REASONS['already-reviewed']}.")
     if (env.get("POST_MODE") or "review").strip().lower() == "none":
-        return 0  # nothing is posted in this mode, so there is no note either
+        return 0
     ctx = Context(dict(env))
     github("POST", f"/repos/{repo}/issues/{pr}/comments", token, {"body": note(ctx, url, previous)})
-    # The request was answered, so it gets the same reaction a posted review gets.
     status.react(repo, token, env.get("TRIGGER_COMMENT_ID", ""), "rocket")
     return 0
 
@@ -134,7 +131,6 @@ if __name__ == "__main__":
     try:
         sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else ""))
     except (urllib.error.URLError, KeyError, OSError) as error:
-        # Reviewing again is always safe, so a failure here never stops the run.
         print(f"::warning::Could not check for an unchanged re-review: {error}")
         set_output("skipped", "false")
         sys.exit(0)

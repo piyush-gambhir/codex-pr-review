@@ -21,9 +21,6 @@ import re
 
 LABEL = "Suggested fix"
 
-# The fence may be indented: finding bodies are only dedented by their common
-# indent, so a block nested under a list item still starts a few spaces in.
-# A longer run of the same fence character closes the block, as in CommonMark.
 BLOCK_RE = re.compile(
     r"^(?P<indent>[ \t]*)(?P<fence>`{3,}|~{3,})[ \t]*suggestion[ \t]*$"
     r"(?P<code>.*?)"

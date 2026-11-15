@@ -53,7 +53,6 @@ class MappingTest(unittest.TestCase):
             "title": "P0: Convert the percentage", "message": "Because.",
         })
         self.assertEqual(items[1]["annotation_level"], "notice")
-        # An empty body falls back to the title, since GitHub requires a message.
         self.assertEqual(items[1]["message"], "Convert the percentage")
 
     def test_annotation_lines_and_text_are_clamped(self):
@@ -83,7 +82,6 @@ class VerdictConclusionTest(unittest.TestCase):
                              f"{key}/{level}")
 
     def test_a_partial_review_of_a_clean_diff_is_not_a_pass(self):
-        # The old rule made "no findings" a success whatever the run covered.
         self.assertEqual(checks.conclusion([], None), "success")
         self.assertEqual(checks.conclusion([], None, self.health(verdicts.CHANGES, "low")), "neutral")
 

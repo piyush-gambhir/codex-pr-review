@@ -35,7 +35,6 @@ class BaseUrlTest(unittest.TestCase):
             self.assertEqual(icons.resolve_ref(dict(env, GITHUB_ACTION_REF=ref)), icons.PINNED_REF)
 
     def test_another_repository_or_a_local_checkout_never_leaks(self):
-        # A local `./` use sets neither variable; a mirror sets a different repo.
         for env in ({}, {"GITHUB_ACTION_REF": "v1.2.1"},
                     {"GITHUB_ACTION_REPOSITORY": "acme/private-mirror", "GITHUB_ACTION_REF": "v9.9.9"}):
             url = icons.default_base_url(env)
@@ -56,7 +55,7 @@ class BaseUrlTest(unittest.TestCase):
         self.assertEqual([off.img(name) for name in icons.CATALOGUE], [""] * len(icons.CATALOGUE))
         self.assertEqual(off.tagged("inline", "Inline"), "Inline")
         self.assertEqual(off.marker("suggestion", "suggested fix"), "<sub>(suggested fix)</sub>")
-        self.assertFalse(icons.Icons("", True).enabled)  # nowhere to load from
+        self.assertFalse(icons.Icons("", True).enabled)
 
 
 class CatalogueTest(unittest.TestCase):
@@ -172,9 +171,6 @@ def status_notes(**env):
     return [body for body in bodies if body]
 
 
-# Anything a reader would call an emoji: pictographs, dingbats, symbol blocks
-# and the variation selectors that turn a glyph into one. The typographic
-# characters the layouts really do use are the only exceptions.
 KEEP = set("\u2014\u2013\u00b7\u00a0\u2026\u2018\u2019\u201c\u201d")
 EMOJI_RANGES = (
     (0x2190, 0x21FF), (0x2300, 0x23FF), (0x2460, 0x24FF), (0x25A0, 0x27BF),
@@ -210,8 +206,6 @@ class NoEmojiTest(unittest.TestCase):
 
     def test_no_tracked_file_contains_a_literal_emoji(self):
         """Sources, docs and the icons stay ASCII-safe: no emoji anywhere."""
-        # Paths are compared relative to the repository root: the checkout itself
-        # may well sit under a dotted directory.
         skip = {".git", ".dev", ".claude", "node_modules"}
         offenders = {}
         for path in sorted(ROOT.rglob("*")):

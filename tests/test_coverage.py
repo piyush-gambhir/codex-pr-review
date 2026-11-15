@@ -14,7 +14,6 @@ import gitrepo  # noqa: E402
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 HOME = ROOT / "tests" / "fixtures" / "coverage-home"
 WORK = "/home/runner/work/repo/repo"
-# Everything the fixture's pull request changes.
 CHANGED = ["src/app.ts", "src/util.ts", "src/late.ts", "src/models.py",
            "src/secret.py", "docs/guide.md", "src/deep/thing.ts", "src/never.ts"]
 
@@ -64,7 +63,6 @@ class RulesTest(unittest.TestCase):
     def test_a_whole_diff_with_no_recorded_output_falls_back_to_the_shard(self):
         found = seen([run("git diff abc123")], scope=["src/app.ts", "src/util.ts"])
         self.assertEqual(found, {"src/app.ts", "src/util.ts"})
-        # Without a scope (the cross-cutting pass) the claim is not made.
         self.assertEqual(seen([run("git diff abc123")], scope=[]), set())
 
     def test_a_diff_limited_to_paths_counts_only_those(self):
@@ -107,7 +105,6 @@ class RolloutTest(unittest.TestCase):
         self.assertTrue(any("git diff --stat" in c for c in commands), commands)
         self.assertTrue(any(c.startswith("git diff 1111111") for c in commands), commands)
         self.assertTrue(any("nl -ba src/models.py" in c for c in commands), commands)
-        # The `exec` tool's output is linked back to its call by call_id.
         diff = next(r for r in self.records if r.command.startswith("git diff 1111111"))
         self.assertIn("diff --git a/src/app.ts", diff.output)
 

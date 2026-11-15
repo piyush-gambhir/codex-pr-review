@@ -31,7 +31,6 @@ class GlobTest(unittest.TestCase):
 
     def test_bare_pattern_also_matches_the_file_name(self):
         self.assertMatches("*.lock", ["yarn.lock", "sub/dir/yarn.lock"], ["yarn.lock.md"])
-        # With a separator it is anchored at the repository root instead.
         self.assertMatches("dist/*.js", ["dist/a.js"], ["pkg/dist/a.js"])
 
     def test_question_mark_and_character_class(self):
@@ -129,8 +128,8 @@ class ChangedLinesTest(unittest.TestCase):
         git(repo, "add", "-A")
         git(repo, "commit", "-qm", "base")
         git(repo, "checkout", "-qb", "feature")
-        pathlib.Path(repo, "src/a.ts").write_text("one\ntwo\nthree\nfour\n")  # 2 added
-        pathlib.Path(repo, "gen/big.ts").write_text("x\n" * 50)  # 50 added, excluded
+        pathlib.Path(repo, "src/a.ts").write_text("one\ntwo\nthree\nfour\n")
+        pathlib.Path(repo, "gen/big.ts").write_text("x\n" * 50)
         git(repo, "add", "-A")
         git(repo, "commit", "-qm", "feature")
 
@@ -150,7 +149,6 @@ class ChangedLinesTest(unittest.TestCase):
         self.assertEqual(filters.changed_lines("main", self.repo, pf), 50)
 
     def test_counts_from_the_merge_base_not_the_branch_tip(self):
-        # A commit only on main must not show up as a deletion on the feature side.
         git(self.repo, "checkout", "-q", "main")
         pathlib.Path(self.repo, "src/only-on-main.ts").write_text("m\n" * 30)
         git(self.repo, "add", "-A")
@@ -227,7 +225,6 @@ class ReviewModeTest(unittest.TestCase):
     def test_auto_goes_full_over_the_limit(self):
         self.assertEqual(filters.resolve_review_mode("auto", "warn", 5_000, 3_000), "full")
         self.assertEqual(filters.resolve_review_mode("auto", "warn", 2_000, 3_000), "single")
-        # Exactly at the limit is not over it.
         self.assertEqual(filters.resolve_review_mode("auto", "warn", 3_000, 3_000), "single")
 
     def test_auto_without_a_limit_has_no_size_to_be_over(self):

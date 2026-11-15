@@ -25,7 +25,6 @@ class FingerprintTest(unittest.TestCase):
     def test_survives_line_shifts_and_word_order(self):
         base = history.fingerprint("src/pricing.ts", "Convert the percentage before applying it")
         self.assertEqual(base, history.fingerprint("src/pricing.ts", "Convert the percentage before applying it"))
-        # Word order, casing, punctuation and stopwords do not matter.
         self.assertEqual(base, history.fingerprint("src/pricing.ts", "applying, before converting"[:0] + "Percentage convert before applying it"))
         self.assertEqual(base, history.fingerprint("SRC/Pricing.ts", "Convert percentage before applying"))
 
@@ -117,7 +116,6 @@ class LatestStateTest(unittest.TestCase):
         items = [{"created_at": "2026-01-01T00:00:00Z", "body": history.state_marker(OLD_SHA, [])},
                  {"submitted_at": "2026-01-02T00:00:00Z", "body": history.state_marker(SHA, [])}]
         self.assertEqual(history.latest_state("o/r", "1", "t", refuse, items)["sha"], SHA)
-        # An empty conversation is an answer too, not a reason to go and look.
         self.assertEqual(history.latest_state("o/r", "1", "t", refuse, []), {})
 
 
@@ -144,7 +142,6 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(still_open, {current[0]["fingerprint"]})
 
     def test_incremental_carries_untouched_files_forward(self):
-        # Only pricing.ts changed in the new commits, and one of its findings is gone.
         current = [finding("Handle zero units", priority=2, start=22)]
         resolved, carried, still_open = history.classify(self.previous, current, ["src/pricing.ts"])
         self.assertEqual([e["title"] for e in resolved], ["Convert the percentage before applying it"])
@@ -274,7 +271,6 @@ class PlanTest(unittest.TestCase):
                     mock.patch("pr_state.fetch", return_value=None):
                 self.assertEqual(history.main("plan"), 0)
             plan = history.load_plan(str(state_file))
-        # None, not [], so every reader falls back to its own REST listing.
         self.assertNotIn("hide", plan)
         self.assertNotIn("threads", plan)
 
@@ -314,7 +310,6 @@ class RenderTest(unittest.TestCase):
         text = history.resolved_section([], carried, ctx)
         self.assertIn("**Still open, not re-checked (1)**", text)
         self.assertIn("P2 Validate the coupon code", text)
-        # A full review read the file; the finding is open because the file didn't change.
         ctx.incremental = False
         self.assertIn("**Still open, file unchanged (1)**", history.resolved_section([], carried, ctx))
 
@@ -352,8 +347,6 @@ class PublishIntegrationTest(unittest.TestCase):
         return dict({"previous": {"v": 1, "sha": OLD_SHA, "findings": entries}}, **extra)
 
     def test_resolved_count_and_sections(self):
-        # The surviving finding is reported where it was (line 15); the fixed one
-        # sat on a different line (16), so matching by place can't confuse them.
         plan = self.plan("Handle zero units", "Convert the percentage")
         code, outputs, summary = self.run_main(self.review_text("Handle zero units"), plan)
         self.assertEqual(code, 0)
@@ -470,7 +463,6 @@ class ChangedSinceTest(unittest.TestCase):
         resolved, carried, still_open = history.classify(previous, [], history.changed_since(self.first, self.second))
         self.assertEqual([i["path"] for i in resolved], ["a.py"])
         self.assertEqual([i["path"] for i in carried], ["b.py"])
-        # An identical commit can't fix anything, whatever Codex reports this time.
         resolved, carried, _ = history.classify(previous, [], history.changed_since(self.second, self.second))
         self.assertEqual((resolved, len(carried)), ([], 2))
 
@@ -493,8 +485,6 @@ class MatchByPlaceTest(unittest.TestCase):
         self.assertEqual(still_open, {now[0]["fingerprint"]})
 
     def test_a_neighbour_is_not_claimed_twice(self):
-        # Two bugs a line apart; one is fixed. The survivor matches its own title
-        # first, so the fixed one can't borrow it by place.
         previous = [self.item("Convert the percentage", 15), self.item("Handle zero units", 16)]
         now = [self.finding("Handle zero units", 16)]
         resolved, _, still_open = history.classify(previous, now, None)
@@ -507,7 +497,6 @@ class MatchByPlaceTest(unittest.TestCase):
         self.assertEqual(len(history.classify(previous, [self.finding("Other", 22, path="src/b.ts")], None)[0]), 1)
 
     def test_older_copies_of_one_bug_all_match_it(self):
-        # The state can hold several rewordings of the same bug at the same line.
         previous = [self.item("Handle zero units before dividing", 22), self.item("Guard NaN for empty carts", 22),
                     self.item("Average divides by zero", 21)]
         now = [self.finding("Return a fallback when there are no units", 21, 22)]

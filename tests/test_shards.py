@@ -104,7 +104,6 @@ class SyntheticBaseTest(unittest.TestCase):
         """(base, head) commits for a shard holding exactly `paths`."""
         chosen = [self.by_path[path] for path in paths]
         name = "index-" + "-".join(path.replace("/", "_") for path in paths)
-        # Outside the repository, so the repository's own index is never touched.
         index = str(pathlib.Path(self.indexes.name) / name)
         return shards.synthetic_base(chosen, self.base, self.head, str(self.repo.path), index)
 
@@ -148,8 +147,6 @@ class SyntheticBaseTest(unittest.TestCase):
         for shard in plan:
             base, head = self.isolate(shard.paths)
             covered.extend(shards.shard_diff(base, head, str(self.repo.path)))
-        # Every changed path is in exactly one shard's diff (a rename adds its
-        # old path, which is not a changed path of its own).
         self.assertEqual(sorted(set(covered) & set(self.by_path)), sorted(self.by_path))
         self.assertEqual(len(covered), len(set(covered)))
 
@@ -161,8 +158,6 @@ class SyntheticBaseTest(unittest.TestCase):
     def test_the_base_commit_sits_on_the_merge_base(self):
         base, head = self.isolate(["src/app.ts"])
         self.assertEqual(shards.git(["rev-parse", base + "^"], str(self.repo.path)).strip(), self.base)
-        # Which is what makes `--base` mean the shard: the reviewer diffs from
-        # the merge base of the two, and that is the synthetic commit itself.
         self.assertEqual(shards.git(["merge-base", base, head], str(self.repo.path)).strip(), base)
 
     def test_building_them_touches_no_ref_and_no_working_tree(self):

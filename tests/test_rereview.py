@@ -33,7 +33,6 @@ class SettingsDigestTest(unittest.TestCase):
         self.assertEqual(len(self.digest()), 12)
 
     def test_cosmetics_do_not_count(self):
-        # Nothing here changes what a review says.
         self.assertEqual(self.digest(), self.digest(REVIEW_TITLE="Something else"))
         self.assertEqual(self.digest(), self.digest(RERUN_HINT="new hint"))
         self.assertEqual(self.digest(), self.digest(HIDE_PREVIOUS="false"))
@@ -61,7 +60,6 @@ class SettingsDigestTest(unittest.TestCase):
             {"INCLUDE_PATHS": "src/**"},
             {"EXCLUDE_PATHS": "*.lock"},
             {"REVIEW_INSTRUCTIONS": "Be strict about money."},
-            # A single review cannot satisfy a request for a full one.
             {"REVIEW_MODE": "full"},
         ):
             self.assertNotEqual(base, self.digest(**change), change)
@@ -69,8 +67,6 @@ class SettingsDigestTest(unittest.TestCase):
     def test_a_full_review_and_a_single_one_are_not_interchangeable(self):
         self.assertNotEqual(self.digest(REVIEW_MODE="single"), self.digest(REVIEW_MODE="full"))
         self.assertEqual(self.digest(REVIEW_MODE="FULL"), self.digest(REVIEW_MODE="full"))
-        # `auto` is resolved to one of the two before the digest is taken, so the
-        # digest never carries it.
         self.assertEqual(self.digest(REVIEW_MODE=""), self.digest(REVIEW_MODE=" "))
 
     def test_a_guidelines_file_counts_by_its_contents(self):
@@ -81,7 +77,6 @@ class SettingsDigestTest(unittest.TestCase):
             first = self.digest(**env)
             guide.write_text("Money is integer cents. Tenancy is P0.", encoding="utf-8")
             self.assertNotEqual(first, self.digest(**env))
-            # A file that is configured but missing is its own case, never a match.
             guide.unlink()
             self.assertNotIn(self.digest(**env), (first, self.digest()))
 
@@ -136,7 +131,6 @@ def run_check(previous, **env):
         }
         full.update(env)
         api = mock.Mock(side_effect=lambda *a, **k: calls.append(a) or {"id": 5})
-        # Every module keeps its own reference to publish_review.github.
         with mock.patch.dict(os.environ, full, clear=True), \
                 mock.patch.object(pr, "github", api), \
                 mock.patch.object(rereview, "github", api), \
@@ -166,7 +160,6 @@ class MainTest(unittest.TestCase):
         self.assertIn(URL, body)
         self.assertIn("Add `force` to the request", body)
         self.assertIn(SHA[:7], body)
-        # The status marker, so the next real review collapses this note.
         self.assertTrue(body.startswith("<!-- codex-pr-review-status -->"))
         self.assertIn(("POST", "/repos/o/r/issues/comments/99/reactions", "t", {"content": "rocket"}),
                       [c for c in calls if "reactions" in c[1]])
@@ -203,7 +196,6 @@ class MainTest(unittest.TestCase):
     def test_a_marker_without_a_verdict_says_nothing_extra(self):
         _, _, calls = run_check(state())
         self.assertNotIn("It said", calls[0][3]["body"])
-        # A score on its own, or a verdict this version does not know, is ignored.
         self.assertEqual(rereview.verdict_line({"hs": 80}), "")
         self.assertEqual(rereview.verdict_line({"vd": "nonsense", "hs": 80}), "")
         self.assertEqual(rereview.verdict_line({"vd": "ready"}), "It said: **Ready to merge**.")
@@ -223,7 +215,6 @@ class RoundTripTest(unittest.TestCase):
             rereview.decision(previous, SHA, history.settings_digest(env)),
             (True, "already-reviewed"),
         )
-        # And a run with one setting changed does not reuse it.
         self.assertEqual(
             rereview.decision(previous, SHA, history.settings_digest({**env, "MAX_PRIORITY": "P1"})),
             (False, "settings-changed"),

@@ -43,7 +43,6 @@ class ShapeTest(unittest.TestCase):
         location = sarif.result(finding(1, 15, 18))["locations"][0]["physicalLocation"]
         self.assertEqual(location["artifactLocation"]["uri"], "src/pricing.ts")
         self.assertEqual(location["region"], {"startLine": 15, "endLine": 18})
-        # Codex sometimes reports a single line, or line 0 for a whole file.
         self.assertEqual(sarif.result(finding(1, 0, 0))["locations"][0]["physicalLocation"]["region"],
                          {"startLine": 1, "endLine": 1})
 

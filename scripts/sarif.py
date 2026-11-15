@@ -29,7 +29,6 @@ SCHEMA = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata
 TOOL_NAME = "Codex PR Review"
 TOOL_URI = "https://github.com/piyush-gambhir/codex-pr-review"
 FINGERPRINT_KEY = "codexPrReview/v1"
-# SARIF levels and code scanning's problem.severity tag, per priority.
 LEVEL = {0: "error", 1: "error", 2: "warning", 3: "note"}
 SEVERITY = {0: "error", 1: "error", 2: "warning", 3: "recommendation"}
 DESCRIPTION = {

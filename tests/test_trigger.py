@@ -67,7 +67,6 @@ class TriggerTest(unittest.TestCase):
     def paths(self, calls, method=None):
         return [path for verb, path, _ in calls if method in (None, verb)]
 
-    # Option parsing ----------------------------------------------------------
 
     def options(self, body, **env):
         out, _ = self.run_trigger("issue_comment", comment_event(body), **env)
@@ -89,7 +88,7 @@ class TriggerTest(unittest.TestCase):
         out, calls = self.run_trigger(
             "issue_comment", comment_event("@gpt review bedrock"), ALLOWED_PROVIDERS="openai")
         self.assertEqual((out["run"], out["reason"]), ("false", "invalid-provider"))
-        self.assertEqual(calls, [])  # nothing is asked of GitHub
+        self.assertEqual(calls, [])
         out, _ = self.run_trigger("issue_comment", comment_event(), DEFAULT_EFFORT="turbo")
         self.assertEqual(out["reason"], "invalid-effort")
 
@@ -98,7 +97,6 @@ class TriggerTest(unittest.TestCase):
             "issue_comment", comment_event("/review high"), COMMAND="/review")
         self.assertEqual((out["run"], out["effort"]), ("true", "high"))
 
-    # issue_comment -----------------------------------------------------------
 
     def test_comment_runs_and_reacts(self):
         out, calls = self.run_trigger("issue_comment", comment_event())
@@ -120,7 +118,6 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual(out["reason"], "not-a-pull-request")
         self.assertEqual(calls, [])
 
-    # Access and pull request checks ------------------------------------------
 
     def test_read_access_is_refused(self):
         out, calls = self.run_trigger("issue_comment", comment_event(), permission="read")
@@ -135,7 +132,7 @@ class TriggerTest(unittest.TestCase):
         out, calls = self.run_trigger(
             "issue_comment", comment_event(), pr=pull_request(head_repo="fork/r"))
         self.assertEqual((out["run"], out["reason"]), ("false", "fork"))
-        self.assertEqual(self.paths(calls, "POST"), [])  # no reply, no reaction
+        self.assertEqual(self.paths(calls, "POST"), [])
 
     def test_closed_pull_request_is_skipped(self):
         out, _ = self.run_trigger("issue_comment", comment_event(), pr=pull_request(state="closed"))
@@ -160,7 +157,6 @@ class TriggerTest(unittest.TestCase):
     def test_empty_base_branches_falls_back_to_the_default_branch(self):
         out, calls = self.run_trigger("issue_comment", comment_event(), BASE_BRANCHES="")
         self.assertEqual(out["run"], "true")
-        # The pull request payload already names it, so the repository is not fetched.
         self.assertNotIn("/repos/o/r", self.paths(calls, "GET"))
 
     def test_a_payload_without_a_default_branch_still_asks(self):
@@ -170,7 +166,6 @@ class TriggerTest(unittest.TestCase):
         self.assertEqual(out["run"], "true")
         self.assertIn("/repos/o/r", self.paths(calls, "GET"))
 
-    # force -------------------------------------------------------------------
 
     def test_force_asks_for_a_fresh_review(self):
         out, _ = self.run_trigger("issue_comment", comment_event("@gpt review force"))
@@ -192,7 +187,6 @@ class TriggerTest(unittest.TestCase):
         out, _ = self.run_trigger("issue_comment", comment_event("@gpt review force"), permission="read")
         self.assertEqual((out["run"], out["force"]), ("false", "false"))
 
-    # full --------------------------------------------------------------------
 
     def test_full_asks_for_a_full_review(self):
         out, _ = self.run_trigger("issue_comment", comment_event("@gpt review full"))
@@ -217,7 +211,6 @@ class TriggerTest(unittest.TestCase):
         out, _ = self.run_trigger("issue_comment", comment_event("@gpt review full"), permission="read")
         self.assertEqual((out["run"], out["full"]), ("false", "false"))
 
-    # pull_request labelled ---------------------------------------------------
 
     def test_label_runs_and_removes_the_label(self):
         out, calls = self.run_trigger("pull_request", label_event())
@@ -253,14 +246,13 @@ class TriggerTest(unittest.TestCase):
         out, _ = self.run_trigger("pull_request", label_event(), LABEL="")
         self.assertEqual(out["reason"], "no-label-configured")
 
-    # workflow_dispatch -------------------------------------------------------
 
     def test_dispatch_with_a_pull_request_number(self):
         out, calls = self.run_trigger("workflow_dispatch", {}, PR_NUMBER="7",
                                       DEFAULT_EFFORT="high")
         self.assertEqual((out["run"], out["pr-number"], out["effort"]), ("true", "7", "high"))
         self.assertEqual(out["comment-id"], "")
-        self.assertEqual(self.paths(calls, "POST"), [])  # nothing to react to
+        self.assertEqual(self.paths(calls, "POST"), [])
 
     def test_dispatch_without_a_pull_request_number(self):
         out, calls = self.run_trigger("workflow_dispatch", {})

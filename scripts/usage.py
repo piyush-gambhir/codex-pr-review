@@ -27,8 +27,6 @@ import os
 import pathlib
 import sys
 
-# Per 1M tokens: (input, cached input, output). Reasoning bills as output.
-# Standard OpenAI API rates, which Bedrock matches.
 PRICES = {
     "gpt-6.1-sol": (2.00, 0.10, 10.00),
     "gpt-6-sol": (2.00, 0.20, 10.00),
@@ -39,15 +37,12 @@ PRICES = {
     "gpt-5.6-luna": (0.20, 0.02, 1.20),
     "gpt-5.5": (5.00, 0.50, 30.00),
 }
-# Requests with more input than this bill at the long-context rate.
 LONG_CONTEXT_TOKENS = 272_000
 LONG_INPUT_RATE = 2.0
 LONG_OUTPUT_RATE = 1.5
-# Bedrock dresses the same models up as `us.openai.gpt-6-sol` or `openai.gpt-6-sol`.
 REGION_PREFIXES = ("us.", "eu.", "apac.", "global.")
 
 
-# Reading the rollout ---------------------------------------------------------
 
 
 def rollouts(sessions) -> list[pathlib.Path]:
@@ -108,7 +103,6 @@ def collect(sessions) -> tuple[dict[str, int], list[dict]]:
     return totals, requests
 
 
-# Pricing ---------------------------------------------------------------------
 
 
 def normalise_model(model: str) -> str:
@@ -156,7 +150,6 @@ def estimate_cost(totals: dict[str, int], requests: list[dict], rates: tuple[flo
     return request_cost(totals, rates)
 
 
-# Rendering -------------------------------------------------------------------
 
 
 def format_cost(cost: float) -> str:
@@ -178,7 +171,6 @@ def set_output(key: str, value: str) -> None:
             out.write(f"{key}={value}\n")
 
 
-# Main ------------------------------------------------------------------------
 
 
 def session_dirs(env: dict[str, str]) -> list[pathlib.Path]:
@@ -228,6 +220,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except (OSError, ValueError, TypeError, KeyError) as error:
-        # Usage is a nice-to-have; it must never fail a review that went fine.
         print(f"::warning::Could not read Codex usage: {error}")
         sys.exit(0)

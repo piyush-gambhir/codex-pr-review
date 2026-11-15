@@ -45,7 +45,6 @@ class FakePullRequest:
         self.calls = []
         self.posted_body = ""
 
-    # Recorded call log ------------------------------------------------------
 
     def reads(self):
         """The calls that list part of the conversation."""
@@ -54,13 +53,12 @@ class FakePullRequest:
     def writes(self):
         return [name for name in self.calls if not name.startswith("read:")]
 
-    # The API ---------------------------------------------------------------
 
     def __call__(self, method, path, token, payload=None, url=None):
         if url:
             return self._graphql(payload or {})
         if "page=2" in path:
-            return []  # one page of everything
+            return []
         if path.startswith("/repos/o/r/issues/1/comments") and method == "GET":
             self.calls.append("read:issue-comments")
             return [dict(c, node_id=f"IC_{i}", id=100 + i) for i, c in enumerate(self.comments)]
@@ -86,7 +84,7 @@ class FakePullRequest:
         if "resolveReviewThread" in query:
             self.calls.append("resolve")
             return {}
-        if "totalCount" in query:  # the shared read
+        if "totalCount" in query:
             if not self.graphql_pr:
                 self.calls.append("read:pull-request (refused)")
                 return {"errors": [{"message": "Field 'x' doesn't exist"}]}
@@ -226,8 +224,6 @@ class CallCountTest(unittest.TestCase):
         self.gone = gone
         self.comments = [{"body": state_comment([gone]), "created_at": "2026-01-01T00:00:00Z",
                           "html_url": "https://github.com/o/r/pull/1#issuecomment-1"}]
-        # An inline comment this action posted: the finding's fingerprint, then
-        # the marker that makes it collapsible.
         inline = f"old inline\n{history.finding_marker(gone['fp'])}\n{pr.MARKER}"
         self.review_comments = [{"body": inline}]
         self.threads = [("PRRT_1", inline)]
@@ -243,11 +239,11 @@ class CallCountTest(unittest.TestCase):
         _, _, plan, _ = run_review(rest, self.previous)
         self.assertIsNone(plan.get("hide"))
         self.assertEqual(rest.reads(), [
-            "read:pull-request (refused)",   # the shared read is tried first
-            "read:issue-comments", "read:reviews",        # history, on REST
-            "read:issue-comments", "read:review-comments",  # hide-previous, again
-            "read:files",                                 # the diff lines
-            "read:threads",                               # the fixed finding's thread
+            "read:pull-request (refused)",
+            "read:issue-comments", "read:reviews",
+            "read:issue-comments", "read:review-comments",
+            "read:files",
+            "read:threads",
         ])
 
         shared = self.api(graphql_pr=True)
@@ -258,7 +254,6 @@ class CallCountTest(unittest.TestCase):
 
         print(f"conversation reads per run: {len(rest.reads()) - 1} on REST, "
               f"{len(shared.reads())} with the shared read")
-        # The listings the fallback needs, minus its refused first attempt.
         self.assertEqual(len(rest.reads()) - 1, 6)
         self.assertEqual(len(shared.reads()), 2)
 
@@ -272,8 +267,6 @@ class CallCountTest(unittest.TestCase):
         self.assertEqual(results[0], results[1])
         code, found, resolved, writes = results[0]
         self.assertEqual((code, found, resolved), (0, "2", "1"))
-        # Two earlier comments collapsed, the review posted, one fixed thread
-        # resolved, and the verdict label made sure of and put on.
         self.assertEqual(sorted(writes), [
             "POST /repos/o/r/issues/1/labels", "POST /repos/o/r/labels",
             "POST /repos/o/r/pulls/1/reviews", "minimize", "minimize", "resolve",
@@ -285,10 +278,8 @@ class CallCountTest(unittest.TestCase):
         _, _, plan, outputs = run_review(api, self.previous)
         self.assertEqual(plan["signals"], {"draft": False, "mergeable": "CONFLICTING",
                                            "checks": "FAILURE"})
-        # One P1 and one P2 finding (-25), failing checks and a conflict (-20).
         self.assertEqual((outputs["health-score"], outputs["verdict"]), ("55", "changes-requested"))
 
-        # On REST there is no bundle, so the score is the findings alone.
         _, _, plan, outputs = run_review(self.api(graphql_pr=False), self.previous)
         self.assertIsNone(plan.get("signals"))
         self.assertEqual(outputs["health-score"], "75")

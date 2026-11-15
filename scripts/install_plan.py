@@ -33,16 +33,10 @@ import pathlib
 import re
 import sys
 
-# A concrete version, so no resolution is needed: `1.2.3`, `1.2.3-rc.1`.
 EXACT_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-]+)?$")
-# Specs that only ask for "something recent", which the runner's Node may be.
 OPEN_SPECS = ("lts/*", "*", "latest", "node", "current")
-# `22`, `22.x`, `>=22`, `>= 22.x`: a major with nothing more specific after it.
 MAJOR_SPEC_RE = re.compile(r"^(?:>=\s*)?v?(\d+)(?:\.(?:x|\*)){0,2}$")
-# Node the Codex CLI's launcher is run with. The package asks for >= 16; this is
-# the floor below which the runner's own Node is not used even for an open spec.
 MINIMUM_NODE = 20
-# Bump when what is cached changes shape, to leave older entries behind.
 KEY_VERSION = "1"
 
 
@@ -139,10 +133,7 @@ def set_output(key: str, value: str) -> None:
 def probe(env: dict) -> int:
     """Decide whether the two setup actions have anything left to do."""
     spec, current = env.get("NODE_VERSION", ""), env.get("NODE_CURRENT", "")
-    # An empty node-version has always meant "use the runner's Node as is".
     node = bool(spec.strip()) and not node_satisfied(spec, current)
-    # pnpm is only kept when Node is too: a pnpm installed against the runner's
-    # own Node cannot be relied on once setup-node puts a different one in PATH.
     pnpm = node or not pnpm_satisfied(env.get("PNPM_VERSION", ""), env.get("PNPM_CURRENT", ""))
     print(f"Runner has Node {current or 'none'} and pnpm {env.get('PNPM_CURRENT') or 'none'}; "
           f"asked for {spec or 'the runner default'} and pnpm {env.get('PNPM_VERSION') or 'any'}.")
@@ -162,8 +153,6 @@ def key(env: dict) -> int:
         if version:
             print(f"pnpm resolves '{spec}' to {version}.")
     if not version:
-        # Without an exact version a key could name the wrong install, so the
-        # cache is left out of this run rather than risking that.
         print(f"::warning::Could not resolve the Codex version for '{spec}'; installing without the cache.")
         set_output("codex-version", spec)
         set_output("cache-key", "")
